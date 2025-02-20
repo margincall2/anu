@@ -1,0 +1,320 @@
+//+------------------------------------------------------------------+
+//|                                         MultiStrategy_Pro_EA.mql5 |
+//|                                Copyright 2025, margincall2         |
+//|                              Updated: 2025-02-20 21:28:14 UTC     |
+//+------------------------------------------------------------------+
+#property copyright   "Copyright 2025, margincall2"
+#property link       "https://www.margincall2.com"
+#property version    "4.02"
+#property strict
+
+// Trading Mode Enumeration
+enum ENUM_TRADING_MODE {
+    MODE_ALL,       // All Strategies
+    MODE_BREAKOUT,  // Breakout Only
+    MODE_FIBO       // Fibonacci Only
+};
+
+// Trading Statistics Structure
+struct STradingStats {
+    int             totalTrades;
+    double          totalLots;
+    double          totalProfit;
+    double          currentDrawdown;
+    datetime        startTime;
+    int             winTrades;
+    int             lossTrades;
+};
+
+// Account Information Structure
+struct SAccountInfo {
+    long            accountNumber;
+    string          accountName;
+    string          server;
+    int             leverage;
+    double          balance;
+    double          equity;
+    double          margin;
+    double          freeMargin;
+    string          currency;
+    int             lastPing;
+    datetime        lastUpdate;
+};
+
+// Market Data Structure
+struct SMarketData {
+    int             spread;
+    double          ask;
+    double          bid;
+    bool            isMarketOpen;
+    datetime        serverTime;
+    double          minLot;
+    double          maxLot;
+    double          stepLot;
+    double          marginRequired;
+};
+
+//--- Input Parameters
+input group         "=== Strategy Settings ==="
+input ENUM_TRADING_MODE    InpTradeMode    = MODE_ALL;      // Trading Mode
+input ENUM_TIMEFRAMES     InpTimeframe    = PERIOD_M5;     // Trading Timeframe
+input double             InpLotSize      = 0.1;           // Fixed Lot Size
+input double             InpRiskPercent  = 1.0;           // Risk Percent per Trade
+input int                InpMaxSpread    = 30;            // Maximum Spread (points)
+input int                InpStopLoss     = 100;           // Stop Loss (points)
+input int                InpTakeProfit   = 200;           // Take Profit (points)
+
+input group         "=== Debug Settings ==="
+input bool               InpShowDebug     = true;          // Show Debug Panel
+input bool               InpShowAlerts    = true;          // Show Trade Alerts
+input int                InpRefreshSeconds = 1;            // Debug Refresh (seconds)
+
+//--- Global Variables
+STradingStats    Stats;
+SAccountInfo     Account;
+SMarketData      Market;
+datetime         LastUpdateTime;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                     |
+//+------------------------------------------------------------------+
+int OnInit() {
+    // Initialize Stats
+    Stats.startTime = TimeCurrent();
+    Stats.totalTrades = 0;
+    Stats.totalLots = 0;
+    
+    // Initialize Market Info
+    Market.minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+    Market.maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+    Market.stepLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+    Market.marginRequired = SymbolInfoDouble(_Symbol, SYMBOL_MARGIN_INITIAL);
+    
+    // Initialize Account Info
+    UpdateAccountInfo();
+    
+    // Initialize Market Data
+    UpdateMarketData();
+    
+    // Start Debug Timer
+    if(InpShowDebug) EventSetTimer(InpRefreshSeconds);
+    
+    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                  |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason) {
+    EventKillTimer();
+    if(InpShowDebug) Comment("");
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                              |
+//+------------------------------------------------------------------+
+void OnTick() {
+    // Update market and account data
+    UpdateMarketData();
+    UpdateAccountInfo();
+    
+    // Show debug info if enabled
+    if(InpShowDebug) ShowDebugInfo();
+    
+    // Check if we can trade
+    if(!CanTrade()) return;
+    
+    // Trading logic here
+    ProcessTrading();
+}
+
+//+------------------------------------------------------------------+
+//| Timer function                                                    |
+//+------------------------------------------------------------------+
+void OnTimer() {
+    if(InpShowDebug) ShowDebugInfo();
+}
+
+//+------------------------------------------------------------------+
+//| Update Account Information                                        |
+//+------------------------------------------------------------------+
+void UpdateAccountInfo() {
+    Account.accountNumber = AccountInfoInteger(ACCOUNT_LOGIN);
+    Account.accountName = AccountInfoString(ACCOUNT_NAME);
+    Account.server = AccountInfoString(ACCOUNT_SERVER);
+    Account.leverage = (int)AccountInfoInteger(ACCOUNT_LEVERAGE);
+    Account.balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    Account.equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    Account.margin = AccountInfoDouble(ACCOUNT_MARGIN);
+    Account.freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+    Account.currency = AccountInfoString(ACCOUNT_CURRENCY);
+    Account.lastPing = (int)TerminalInfoInteger(TERMINAL_PING_LAST);
+    Account.lastUpdate = TimeCurrent();
+}
+
+//+------------------------------------------------------------------+
+//| Update Market Data                                               |
+//+------------------------------------------------------------------+
+void UpdateMarketData() {
+    Market.spread = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+    Market.ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    Market.bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    Market.isMarketOpen = (bool)!SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE);
+    Market.serverTime = TimeCurrent();
+}
+
+//+------------------------------------------------------------------+
+//| Show Debug Information                                           |
+//+------------------------------------------------------------------+
+void ShowDebugInfo() {
+    string debug = "\n=== MultiStrategy Pro EA ===\n";
+    
+    // Time Information
+    debug += StringFormat("Server Time: %s\n", TimeToString(Market.serverTime, TIME_DATE|TIME_SECONDS));
+    debug += StringFormat("Running Time: %s\n\n", GetRunningTime());
+    
+    // Account Information
+    debug += "=== Account Information ===\n";
+    debug += StringFormat("Number: %d\n", Account.accountNumber);
+    debug += StringFormat("Name: %s\n", Account.accountName);
+    debug += StringFormat("Server: %s\n", Account.server);
+    debug += StringFormat("Leverage: 1:%d\n", Account.leverage);
+    debug += StringFormat("Balance: %.2f %s\n", Account.balance, Account.currency);
+    debug += StringFormat("Equity: %.2f %s\n", Account.equity, Account.currency);
+    debug += StringFormat("Free Margin: %.2f %s\n", Account.freeMargin, Account.currency);
+    debug += StringFormat("Ping: %d ms\n\n", Account.lastPing);
+    
+    // Market Information
+    debug += "=== Market Information ===\n";
+    debug += StringFormat("Symbol: %s\n", _Symbol);
+    debug += StringFormat("Spread: %d points\n", Market.spread);
+    debug += StringFormat("Ask/Bid: %.5f / %.5f\n", Market.ask, Market.bid);
+    debug += StringFormat("Market Status: %s\n\n", Market.isMarketOpen ? "Open" : "Closed");
+    
+    // Trading Statistics
+    debug += "=== Trading Statistics ===\n";
+    debug += StringFormat("Total Trades: %d\n", Stats.totalTrades);
+    debug += StringFormat("Total Volume: %.2f lots\n", Stats.totalLots);
+    debug += StringFormat("Current Profit: %.2f %s\n", Account.equity - Account.balance, Account.currency);
+    debug += StringFormat("Win Rate: %.1f%%\n", GetWinRate());
+    
+    Comment(debug);
+}
+
+//+------------------------------------------------------------------+
+//| Helper Functions                                                  |
+//+------------------------------------------------------------------+
+string GetRunningTime() {
+    int seconds = (int)(TimeCurrent() - Stats.startTime);
+    int hours = seconds / 3600;
+    int minutes = (seconds % 3600) / 60;
+    seconds = seconds % 60;
+    
+    return StringFormat("%02d:%02d:%02d", hours, minutes, seconds);
+}
+
+double GetWinRate() {
+    if(Stats.totalTrades == 0) return 0;
+    return (double)Stats.winTrades / Stats.totalTrades * 100;
+}
+
+bool CanTrade() {
+    if(Market.spread > InpMaxSpread) return false;
+    if(!Market.isMarketOpen) return false;
+    if(Account.freeMargin < Market.marginRequired) return false;
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Position Size                                          |
+//+------------------------------------------------------------------+
+double CalculatePositionSize() {
+    double riskAmount = Account.balance * InpRiskPercent / 100;
+    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+    
+    double lotSize = NormalizeDouble(riskAmount / (InpStopLoss * tickValue), 2);
+    lotSize = MathMax(lotSize, Market.minLot);
+    lotSize = MathMin(lotSize, Market.maxLot);
+    lotSize = NormalizeDouble(lotSize / Market.stepLot, 0) * Market.stepLot;
+    
+    return lotSize;
+}
+
+//+------------------------------------------------------------------+
+//| Process Trading Logic                                            |
+//+------------------------------------------------------------------+
+void ProcessTrading() {
+    // Check for breakout
+    if(CheckBreakout()) {
+        if(InpShowAlerts) Alert("Breakout detected");
+        double lotSize = CalculatePositionSize();
+        OpenPosition(lotSize, OP_BUY);  // Example for buy breakout
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check Breakout                                                    |
+//+------------------------------------------------------------------+
+bool CheckBreakout() {
+    double upperBand = iBands(_Symbol, InpTimeframe, 20, 0, 0, PRICE_CLOSE, MODE_UPPER, 0);
+    double lowerBand = iBands(_Symbol, InpTimeframe, 20, 0, 0, PRICE_CLOSE, MODE_LOWER, 0);
+    
+    if(Close[1] > upperBand) {
+        return true;  // Breakout upward
+    } else if(Close[1] < lowerBand) {
+        return true;  // Breakout downward
+    }
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Open Position                                                    |
+//+------------------------------------------------------------------+
+void OpenPosition(double lotSize, int type) {
+    if(type == OP_BUY) {
+        // Buy order
+        int ticket = OrderSend(_Symbol, OP_BUY, lotSize, Market.ask, 3, 0, 0, "Breakout", MAGIC_NUMBER, 0, Blue);
+        if(ticket < 0) {
+            Print("Error opening order: ", GetLastError());
+        }
+    } else if(type == OP_SELL) {
+        // Sell order
+        int ticket = OrderSend(_Symbol, OP_SELL, lotSize, Market.bid, 3, 0, 0, "Breakout", MAGIC_NUMBER, 0, Red);
+        if(ticket < 0) {
+            Print("Error opening order: ", GetLastError());
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Trade Event Handler                                              |
+//+------------------------------------------------------------------+
+void OnTrade() {
+    // Update trading statistics here
+    UpdateTradeStats();
+}
+
+//+------------------------------------------------------------------+
+//| Update Trade Statistics                                          |
+//+------------------------------------------------------------------+
+void UpdateTradeStats() {
+    // Implementation for updating trade statistics
+    Stats.totalTrades = HistoryDealsTotal();
+    Stats.totalLots = 0;
+    Stats.winTrades = 0;
+    Stats.lossTrades = 0;
+    
+    for(int i = 0; i < Stats.totalTrades; i++) {
+        ulong ticket = HistoryDealGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(HistoryDealGetInteger(ticket, DEAL_ENTRY) == DEAL_ENTRY_OUT) {
+            double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+            double volume = HistoryDealGetDouble(ticket, DEAL_VOLUME);
+            
+            Stats.totalLots += volume;
+            if(profit > 0) Stats.winTrades++;
+            if(profit < 0) Stats.lossTrades++;
+        }
+    }
+}
