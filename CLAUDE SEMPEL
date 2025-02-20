@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                         MultiStrategy_Pro_EA.mql5 |
-//|                                Copyright 2025, margincall2         |
+//|                                Copyright 2025, margincall2        |
 //|                              Updated: 2025-02-21 10:15:30 UTC     |
 //+------------------------------------------------------------------+
 #property copyright   "Copyright 2025, margincall2"
@@ -21,13 +21,16 @@ input double RiskPercent        = 1.0;     // Risk Percent per Trade
 input bool   UseVolatilitySize  = true;    // Use Volatility-Based Position Size
 input bool   MultiTimeframe     = true;    // Use Multi-Timeframe Analysis
 input bool   EnableDebugInfo    = true;    // Enable Debug Information
+input double StopLossPoints     = 30;      // Fixed Stop Loss (points)
+input double TrailingStopPoints = 20;      // Trailing Stop (points)
+input double BreakEvenPoints    = 10;      // Break Even (points)
 
 // Global Variables for Debug Info
 string   g_DebugInfo = "";
 datetime g_LastDebugUpdate = 0;
 
 //+------------------------------------------------------------------+
-//| Donchian Channel Functions                                        |
+//| Donchian Channel Functions                                       |
 //+------------------------------------------------------------------+
 double DonchianUpper(int period, ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
     double highest = 0;
@@ -50,7 +53,7 @@ double DonchianMiddle(int period, ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
 }
 
 //+------------------------------------------------------------------+
-//| Candlestick Pattern Functions                                     |
+//| Candlestick Pattern Functions                                    |
 //+------------------------------------------------------------------+
 bool IsBullishEngulfing(int shift) {
     if(Close[shift] > Open[shift] &&           // Current candle is bullish
@@ -71,7 +74,7 @@ bool IsBearishEngulfing(int shift) {
 }
 
 //+------------------------------------------------------------------+
-//| Fibonacci Functions                                               |
+//| Fibonacci Functions                                              |
 //+------------------------------------------------------------------+
 double[] CalculateFiboLevels(double high, double low) {
     double fiboLevels[];
@@ -88,7 +91,7 @@ double[] CalculateFiboLevels(double high, double low) {
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Total Volume and Lots                                   |
+//| Calculate Total Volume and Lots                                  |
 //+------------------------------------------------------------------+
 void CalculateTotalVolumeAndLots(double &totalVolume, double &totalLots) {
     totalVolume = 0.0;
@@ -105,7 +108,7 @@ void CalculateTotalVolumeAndLots(double &totalVolume, double &totalLots) {
 }
 
 //+------------------------------------------------------------------+
-//| Update Debug Information                                          |
+//| Update Debug Information                                         |
 //+------------------------------------------------------------------+
 void UpdateDebugInfo(ENUM_SIGNAL_TYPE signal, double currentLot = 0.0) {
     if(!EnableDebugInfo) return;
@@ -164,7 +167,7 @@ void UpdateDebugInfo(ENUM_SIGNAL_TYPE signal, double currentLot = 0.0) {
 }
 
 //+------------------------------------------------------------------+
-//| Check for Trading Signals                                         |
+//| Check for Trading Signals                                        |
 //+------------------------------------------------------------------+
 ENUM_SIGNAL_TYPE CheckSignals() {
     // Donchian Breakout Check
@@ -193,7 +196,7 @@ ENUM_SIGNAL_TYPE CheckSignals() {
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Position Size                                           |
+//| Calculate Position Size                                          |
 //+------------------------------------------------------------------+
 double CalculatePositionSize(double stopLoss) {
     double riskAmount = AccountBalance() * RiskPercent / 100;
@@ -214,7 +217,7 @@ double CalculatePositionSize(double stopLoss) {
 }
 
 //+------------------------------------------------------------------+
-//| Place Pending Orders                                              |
+//| Place Pending Orders                                             |
 //+------------------------------------------------------------------+
 void PlacePendingOrders(ENUM_SIGNAL_TYPE signal) {
     double upperDonchian = DonchianUpper(DonchianPeriod);
@@ -227,7 +230,7 @@ void PlacePendingOrders(ENUM_SIGNAL_TYPE signal) {
     if(signal == SIGNAL_BUY) {
         double buyStop = upperDonchian + 10 * Point;
         double sellStop = middleDonchian - 10 * Point;
-        double stopLoss = fiboLevels[1];  // 38.2% Fibonacci level
+        double stopLoss = buyStop - StopLossPoints * Point;
         double takeProfit = upperDonchian + (upperDonchian - middleDonchian);
         
         double lotSize = CalculatePositionSize(MathAbs(buyStop - stopLoss));
@@ -247,7 +250,7 @@ void PlacePendingOrders(ENUM_SIGNAL_TYPE signal) {
     if(signal == SIGNAL_SELL) {
         double sellStop = lowerDonchian - 10 * Point;
         double buyStop = middleDonchian + 10 * Point;
-        double stopLoss = fiboLevels[4];  // 78.6% Fibonacci level
+        double stopLoss = sellStop + StopLossPoints * Point;
         double takeProfit = lowerDonchian - (middleDonchian - lowerDonchian);
         
         double lotSize = CalculatePositionSize(MathAbs(sellStop - stopLoss));
@@ -266,7 +269,43 @@ void PlacePendingOrders(ENUM_SIGNAL_TYPE signal) {
 }
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                    |
+//| Manage Open Orders                                               |
+//+------------------------------------------------------------------+
+void ManageOpenOrders() {
+    for(int i = OrdersTotal() - 1; i >= 0; i--) {
+        if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) {
+            double openPrice = OrderOpenPrice();
+            double currentPrice = OrderType() == OP_BUY ? Bid : Ask;
+            double stopLoss = OrderStopLoss();
+            double takeProfit = OrderTakeProfit();
+            
+            // Break Even
+            if(OrderType() == OP_BUY && currentPrice >= openPrice + BreakEvenPoints * Point) {
+                OrderModify(OrderTicket(), openPrice, openPrice + 1 * Point, takeProfit, 0, clrGreen);
+            }
+            if(OrderType() == OP_SELL && currentPrice <= openPrice - BreakEvenPoints * Point) {
+                OrderModify(OrderTicket(), openPrice, openPrice - 1 * Point, takeProfit, 0, clrGreen);
+            }
+            
+            // Trailing Stop
+            if(OrderType() == OP_BUY && currentPrice - openPrice >= TrailingStopPoints * Point) {
+                double newStopLoss = currentPrice - TrailingStopPoints * Point;
+                if(newStopLoss > stopLoss) {
+                    OrderModify(OrderTicket(), openPrice, newStopLoss, takeProfit, 0, clrGreen);
+                }
+            }
+            if(OrderType() == OP_SELL && openPrice - currentPrice >= TrailingStopPoints * Point) {
+                double newStopLoss = currentPrice + TrailingStopPoints * Point;
+                if(newStopLoss < stopLoss) {
+                    OrderModify(OrderTicket(), openPrice, newStopLoss, takeProfit, 0, clrGreen);
+                }
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit() {
     // Initial debug info update
@@ -275,7 +314,7 @@ int OnInit() {
 }
 
 //+------------------------------------------------------------------+
-//| Expert deinitialization function                                  |
+//| Expert deinitialization function                                 |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason) {
     // Clear any comments on exit
@@ -283,7 +322,7 @@ void OnDeinit(const int reason) {
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                              |
+//| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick() {
     ENUM_SIGNAL_TYPE currentSignal = CheckSignals();
@@ -304,4 +343,7 @@ void OnTick() {
         // Place new pending orders
         PlacePendingOrders(currentSignal);
     }
+    
+    // Manage open orders
+    ManageOpenOrders();
 }
