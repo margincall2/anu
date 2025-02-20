@@ -1,0 +1,68 @@
+bool CheckBreakout() {
+    double upperBand = iBands(_Symbol, InpTimeframe, 20, 0, 0, PRICE_CLOSE, MODE_UPPER, 0);
+    double lowerBand = iBands(_Symbol, InpTimeframe, 20, 0, 0, PRICE_CLOSE, MODE_LOWER, 0);
+
+    if (Close[1] > upperBand && ConfirmHigherTimeframeBreakout(true)) {
+        return true;  // Breakout upward
+    } else if (Close[1] < lowerBand && ConfirmHigherTimeframeBreakout(false)) {
+        return true;  // Breakout downward
+    }
+    return false;
+}
+
+bool ConfirmHigherTimeframeBreakout(bool isBullish) {
+    double upperBandHigher = iBands(_Symbol, PERIOD_H1, 20, 0, 0, PRICE_CLOSE, MODE_UPPER, 0);
+    double lowerBandHigher = iBands(_Symbol, PERIOD_H1, 20, 0, 0, PRICE_CLOSE, MODE_LOWER, 0);
+
+    if (isBullish && Close[1] > upperBandHigher) {
+        return true;
+    } else if (!isBullish && Close[1] < lowerBandHigher) {
+        return true;
+    }
+    return false;
+}
+
+double CalculatePositionSize() {
+    double riskAmount = Account.balance * InpRiskPercent / 100;
+    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+    double atr = iATR(_Symbol, InpTimeframe, 14, 0);  // Average True Range for volatility
+
+    double lotSize = NormalizeDouble(riskAmount / (atr * tickValue), 2);
+    lotSize = MathMax(lotSize, Market.minLot);
+    lotSize = MathMin(lotSize, Market.maxLot);
+    lotSize = NormalizeDouble(lotSize / Market.stepLot, 0) * Market.stepLot;
+
+    return lotSize;
+}
+
+void PlacePendingOrders() {
+    double upperBand = iBands(_Symbol, InpTimeframe, 20, 0, 0, PRICE_CLOSE, MODE_UPPER, 0);
+    double lowerBand = iBands(_Symbol, InpTimeframe, 20, 0, 0, PRICE_CLOSE, MODE_LOWER, 0);
+
+    if (Close[1] > upperBand) {
+        // Place pending buy stop order above the high of the body of the breakout candle
+        double bodyHigh = MathMax(Open[1], Close[1]);
+        double lotSize = CalculatePositionSize();
+        int buyStopTicket = OrderSend(_Symbol, OP_BUYSTOP, lotSize, bodyHigh + 10 * Point, 3, 0, 0, "Pending Buy Stop", MAGIC_NUMBER, 0, Blue);
+        if (buyStopTicket < 0) {
+            Print("Error placing buy stop order: ", GetLastError());
+        }
+
+        // Place pending sell stop order at the low of the body of the breakout candle
+        double bodyLow = MathMin(Open[1], Close[1]);
+        int sellStopTicket = OrderSend(_Symbol, OP_SELLSTOP, lotSize, bodyLow - 10 * Point, 3, 0, 0, "Pending Sell Stop", MAGIC_NUMBER, 0, Red);
+        if (sellStopTicket < 0) {
+            Print("Error placing sell stop order: ", GetLastError());
+        }
+    }
+}
+
+void ProcessTrading() {
+    if (CheckBreakout()) {
+        if (InpShowAlerts) Alert("Breakout detected");
+        double lotSize = CalculatePositionSize();
+        OpenPosition(lotSize, OP_BUY);  // Example for buy breakout
+    } else {
+        PlacePendingOrders();
+    }
+}
