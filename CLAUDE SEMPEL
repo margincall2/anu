@@ -1,104 +1,276 @@
 //+------------------------------------------------------------------+
 //|                                         MultiStrategy_Pro_EA.mql5 |
 //|                                Copyright 2025, margincall2         |
-//|                              Updated: 2025-02-20 21:28:14 UTC     |
+//|                              Updated: 2025-02-21 10:15:30 UTC     |
 //+------------------------------------------------------------------+
 #property copyright   "Copyright 2025, margincall2"
-#property link       "https://www.margincall2.com"
-#property version    "4.02"
+#property version    "1.0"
 #property strict
 
-// Trading Mode Enumeration
-enum ENUM_TRADING_MODE {
-    MODE_ALL,       // All Strategies
-    MODE_BREAKOUT,  // Breakout Only
-    MODE_FIBO       // Fibonacci Only
+// Enums
+enum ENUM_SIGNAL_TYPE {
+    SIGNAL_BUY,    // Buy Signal
+    SIGNAL_SELL,   // Sell Signal
+    SIGNAL_NONE    // No Signal
 };
 
-// Trading Statistics Structure
-struct STradingStats {
-    int             totalTrades;
-    double          totalLots;
-    double          totalProfit;
-    double          currentDrawdown;
-    datetime        startTime;
-    int             winTrades;
-    int             lossTrades;
-};
+// Input Parameters
+input int    DonchianPeriod     = 20;      // Donchian Channel Period
+input int    FiboPeriod         = 20;      // Fibonacci Period
+input double RiskPercent        = 1.0;     // Risk Percent per Trade
+input bool   UseVolatilitySize  = true;    // Use Volatility-Based Position Size
+input bool   MultiTimeframe     = true;    // Use Multi-Timeframe Analysis
+input bool   EnableDebugInfo    = true;    // Enable Debug Information
 
-// Account Information Structure
-struct SAccountInfo {
-    long            accountNumber;
-    string          accountName;
-    string          server;
-    int             leverage;
-    double          balance;
-    double          equity;
-    double          margin;
-    double          freeMargin;
-    string          currency;
-    int             lastPing;
-    datetime        lastUpdate;
-};
-
-// Market Data Structure
-struct SMarketData {
-    int             spread;
-    double          ask;
-    double          bid;
-    bool            isMarketOpen;
-    datetime        serverTime;
-    double          minLot;
-    double          maxLot;
-    double          stepLot;
-    double          marginRequired;
-};
-
-//--- Input Parameters
-input group         "=== Strategy Settings ==="
-input ENUM_TRADING_MODE    InpTradeMode    = MODE_ALL;      // Trading Mode
-input ENUM_TIMEFRAMES     InpTimeframe    = PERIOD_M5;     // Trading Timeframe
-input double             InpLotSize      = 0.1;           // Fixed Lot Size
-input double             InpRiskPercent  = 1.0;           // Risk Percent per Trade
-input int                InpMaxSpread    = 30;            // Maximum Spread (points)
-input int                InpStopLoss     = 100;           // Stop Loss (points)
-input int                InpTakeProfit   = 200;           // Take Profit (points)
-
-input group         "=== Debug Settings ==="
-input bool               InpShowDebug     = true;          // Show Debug Panel
-input bool               InpShowAlerts    = true;          // Show Trade Alerts
-input int                InpRefreshSeconds = 1;            // Debug Refresh (seconds)
-
-//--- Global Variables
-STradingStats    Stats;
-SAccountInfo     Account;
-SMarketData      Market;
-datetime         LastUpdateTime;
+// Global Variables for Debug Info
+string   g_DebugInfo = "";
+datetime g_LastDebugUpdate = 0;
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                     |
+//| Donchian Channel Functions                                        |
+//+------------------------------------------------------------------+
+double DonchianUpper(int period, ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
+    double highest = 0;
+    for(int i = 0; i < period; i++) {
+        highest = MathMax(highest, iHigh(NULL, timeframe, i));
+    }
+    return highest;
+}
+
+double DonchianLower(int period, ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
+    double lowest = DBL_MAX;
+    for(int i = 0; i < period; i++) {
+        lowest = MathMin(lowest, iLow(NULL, timeframe, i));
+    }
+    return lowest;
+}
+
+double DonchianMiddle(int period, ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
+    return (DonchianUpper(period, timeframe) + DonchianLower(period, timeframe)) / 2;
+}
+
+//+------------------------------------------------------------------+
+//| Candlestick Pattern Functions                                     |
+//+------------------------------------------------------------------+
+bool IsBullishEngulfing(int shift) {
+    if(Close[shift] > Open[shift] &&           // Current candle is bullish
+       Open[shift+1] > Close[shift+1] &&       // Previous candle is bearish
+       Open[shift] < Close[shift+1] &&         // Current open below prev close
+       Close[shift] > Open[shift+1])           // Current close above prev open
+        return true;
+    return false;
+}
+
+bool IsBearishEngulfing(int shift) {
+    if(Close[shift] < Open[shift] &&           // Current candle is bearish
+       Open[shift+1] < Close[shift+1] &&       // Previous candle is bullish
+       Open[shift] > Close[shift+1] &&         // Current open above prev close
+       Close[shift] < Open[shift+1])           // Current close below prev open
+        return true;
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Fibonacci Functions                                               |
+//+------------------------------------------------------------------+
+double[] CalculateFiboLevels(double high, double low) {
+    double fiboLevels[];
+    ArrayResize(fiboLevels, 6);
+    
+    fiboLevels[0] = low + (high - low) * 0.236;
+    fiboLevels[1] = low + (high - low) * 0.382;
+    fiboLevels[2] = low + (high - low) * 0.5;
+    fiboLevels[3] = low + (high - low) * 0.618;
+    fiboLevels[4] = low + (high - low) * 0.786;
+    fiboLevels[5] = high;
+    
+    return fiboLevels;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Total Volume and Lots                                   |
+//+------------------------------------------------------------------+
+void CalculateTotalVolumeAndLots(double &totalVolume, double &totalLots) {
+    totalVolume = 0.0;
+    totalLots = 0.0;
+    
+    for(int i = 0; i < OrdersTotal(); i++) {
+        if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) {
+            if(OrderSymbol() == Symbol()) {
+                totalLots += OrderLots();
+                totalVolume += OrderLots() * OrderOpenPrice();
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Update Debug Information                                          |
+//+------------------------------------------------------------------+
+void UpdateDebugInfo(ENUM_SIGNAL_TYPE signal, double currentLot = 0.0) {
+    if(!EnableDebugInfo) return;
+    
+    // Only update debug info every second to reduce CPU load
+    if(TimeCurrent() - g_LastDebugUpdate < 1) return;
+    g_LastDebugUpdate = TimeCurrent();
+    
+    // Get account information
+    string accountName = AccountInfoString(ACCOUNT_NAME);
+    long accountNumber = AccountInfoInteger(ACCOUNT_LOGIN);
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+    
+    // Calculate total volume and lots
+    double totalVolume = 0.0;
+    double totalLots = 0.0;
+    CalculateTotalVolumeAndLots(totalVolume, totalLots);
+    
+    // Get current spread
+    double currentSpread = SymbolInfoInteger(Symbol(), SYMBOL_SPREAD) * Point();
+    
+    // Format the debug info
+    g_DebugInfo = "=== MultiStrategy Pro EA Debug Info ===\n";
+    g_DebugInfo += StringFormat("Account: %s (#%d)\n", accountName, accountNumber);
+    g_DebugInfo += StringFormat("Balance: %.2f | Equity: %.2f\n", accountBalance, accountEquity);
+    g_DebugInfo += StringFormat("Risk: %.2f%% (%.2f currency units)\n", 
+                               RiskPercent, accountBalance * RiskPercent / 100);
+    g_DebugInfo += StringFormat("Total Lots: %.2f | Total Volume: %.2f\n", totalLots, totalVolume);
+    g_DebugInfo += StringFormat("Current Lot: %.2f | Current Spread: %d points\n", 
+                               currentLot, (int)(currentSpread/Point()));
+    
+    // Signal information
+    string signalInfo = "No Signal";
+    if(signal == SIGNAL_BUY) signalInfo = "BUY Signal Active";
+    if(signal == SIGNAL_SELL) signalInfo = "SELL Signal Active";
+    g_DebugInfo += StringFormat("Signal: %s\n", signalInfo);
+    
+    // Strategy parameters
+    g_DebugInfo += "--- Strategy Parameters ---\n";
+    g_DebugInfo += StringFormat("Donchian Period: %d | Fibo Period: %d\n", DonchianPeriod, FiboPeriod);
+    g_DebugInfo += StringFormat("Volatility Sizing: %s | Multi-Timeframe: %s\n", 
+                               UseVolatilitySize ? "Enabled" : "Disabled",
+                               MultiTimeframe ? "Enabled" : "Disabled");
+    
+    // Market levels
+    double upperDonchian = DonchianUpper(DonchianPeriod);
+    double lowerDonchian = DonchianLower(DonchianPeriod);
+    g_DebugInfo += "--- Market Levels ---\n";
+    g_DebugInfo += StringFormat("Donchian Upper: %.5f\n", upperDonchian);
+    g_DebugInfo += StringFormat("Donchian Lower: %.5f\n", lowerDonchian);
+    g_DebugInfo += StringFormat("ATR(14): %.5f\n", iATR(NULL, PERIOD_CURRENT, 14, 0));
+    
+    // Display comment
+    Comment(g_DebugInfo);
+}
+
+//+------------------------------------------------------------------+
+//| Check for Trading Signals                                         |
+//+------------------------------------------------------------------+
+ENUM_SIGNAL_TYPE CheckSignals() {
+    // Donchian Breakout Check
+    double upperDonchian = DonchianUpper(DonchianPeriod);
+    double lowerDonchian = DonchianLower(DonchianPeriod);
+    
+    // Multi-Timeframe Confirmation
+    bool mtfConfirm = true;
+    if(MultiTimeframe) {
+        double upperH1 = DonchianUpper(DonchianPeriod, PERIOD_H1);
+        double lowerH1 = DonchianLower(DonchianPeriod, PERIOD_H1);
+        mtfConfirm = (Close[1] > upperH1 || Close[1] < lowerH1);
+    }
+    
+    // Bullish Signal
+    if(Close[1] > upperDonchian && IsBullishEngulfing(1) && mtfConfirm) {
+        return SIGNAL_BUY;
+    }
+    
+    // Bearish Signal
+    if(Close[1] < lowerDonchian && IsBearishEngulfing(1) && mtfConfirm) {
+        return SIGNAL_SELL;
+    }
+    
+    return SIGNAL_NONE;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Position Size                                           |
+//+------------------------------------------------------------------+
+double CalculatePositionSize(double stopLoss) {
+    double riskAmount = AccountBalance() * RiskPercent / 100;
+    double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+    
+    double atrMultiplier = 1.0;
+    if(UseVolatilitySize) {
+        double atr = iATR(NULL, PERIOD_CURRENT, 14, 0);
+        double avgAtr = iATR(NULL, PERIOD_CURRENT, 14, 10); // Average ATR
+        atrMultiplier = atr / avgAtr;
+    }
+    
+    double lotSize = NormalizeDouble((riskAmount * atrMultiplier) / (stopLoss * tickValue), 2);
+    lotSize = MathMin(lotSize, SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX));
+    lotSize = MathMax(lotSize, SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN));
+    
+    return lotSize;
+}
+
+//+------------------------------------------------------------------+
+//| Place Pending Orders                                              |
+//+------------------------------------------------------------------+
+void PlacePendingOrders(ENUM_SIGNAL_TYPE signal) {
+    double upperDonchian = DonchianUpper(DonchianPeriod);
+    double lowerDonchian = DonchianLower(DonchianPeriod);
+    double middleDonchian = DonchianMiddle(DonchianPeriod);
+    
+    // Calculate Fibonacci levels
+    double[] fiboLevels = CalculateFiboLevels(upperDonchian, lowerDonchian);
+    
+    if(signal == SIGNAL_BUY) {
+        double buyStop = upperDonchian + 10 * Point;
+        double sellStop = middleDonchian - 10 * Point;
+        double stopLoss = fiboLevels[1];  // 38.2% Fibonacci level
+        double takeProfit = upperDonchian + (upperDonchian - middleDonchian);
+        
+        double lotSize = CalculatePositionSize(MathAbs(buyStop - stopLoss));
+        
+        // Update debug info with calculated lot size
+        UpdateDebugInfo(signal, lotSize);
+        
+        // Place Buy Stop
+        OrderSend(Symbol(), OP_BUYSTOP, lotSize, buyStop, 3, stopLoss, takeProfit, 
+                 "Buy Stop", 0, 0, clrBlue);
+                 
+        // Place Sell Stop for reversal
+        OrderSend(Symbol(), OP_SELLSTOP, lotSize, sellStop, 3, upperDonchian, lowerDonchian, 
+                 "Sell Stop", 0, 0, clrRed);
+    }
+    
+    if(signal == SIGNAL_SELL) {
+        double sellStop = lowerDonchian - 10 * Point;
+        double buyStop = middleDonchian + 10 * Point;
+        double stopLoss = fiboLevels[4];  // 78.6% Fibonacci level
+        double takeProfit = lowerDonchian - (middleDonchian - lowerDonchian);
+        
+        double lotSize = CalculatePositionSize(MathAbs(sellStop - stopLoss));
+        
+        // Update debug info with calculated lot size
+        UpdateDebugInfo(signal, lotSize);
+        
+        // Place Sell Stop
+        OrderSend(Symbol(), OP_SELLSTOP, lotSize, sellStop, 3, stopLoss, takeProfit, 
+                 "Sell Stop", 0, 0, clrRed);
+                 
+        // Place Buy Stop for reversal
+        OrderSend(Symbol(), OP_BUYSTOP, lotSize, buyStop, 3, lowerDonchian, upperDonchian, 
+                 "Buy Stop", 0, 0, clrBlue);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                    |
 //+------------------------------------------------------------------+
 int OnInit() {
-    // Initialize Stats
-    Stats.startTime = TimeCurrent();
-    Stats.totalTrades = 0;
-    Stats.totalLots = 0;
-    
-    // Initialize Market Info
-    Market.minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-    Market.maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-    Market.stepLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-    Market.marginRequired = SymbolInfoDouble(_Symbol, SYMBOL_MARGIN_INITIAL);
-    
-    // Initialize Account Info
-    UpdateAccountInfo();
-    
-    // Initialize Market Data
-    UpdateMarketData();
-    
-    // Start Debug Timer
-    if(InpShowDebug) EventSetTimer(InpRefreshSeconds);
-    
+    // Initial debug info update
+    UpdateDebugInfo(SIGNAL_NONE);
     return(INIT_SUCCEEDED);
 }
 
@@ -106,215 +278,30 @@ int OnInit() {
 //| Expert deinitialization function                                  |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason) {
-    EventKillTimer();
-    if(InpShowDebug) Comment("");
+    // Clear any comments on exit
+    Comment("");
 }
 
 //+------------------------------------------------------------------+
 //| Expert tick function                                              |
 //+------------------------------------------------------------------+
 void OnTick() {
-    // Update market and account data
-    UpdateMarketData();
-    UpdateAccountInfo();
+    ENUM_SIGNAL_TYPE currentSignal = CheckSignals();
     
-    // Show debug info if enabled
-    if(InpShowDebug) ShowDebugInfo();
+    // Update debug info on every tick
+    UpdateDebugInfo(currentSignal);
     
-    // Check if we can trade
-    if(!CanTrade()) return;
-    
-    // Trading logic here
-    ProcessTrading();
-}
-
-//+------------------------------------------------------------------+
-//| Timer function                                                    |
-//+------------------------------------------------------------------+
-void OnTimer() {
-    if(InpShowDebug) ShowDebugInfo();
-}
-
-//+------------------------------------------------------------------+
-//| Update Account Information                                        |
-//+------------------------------------------------------------------+
-void UpdateAccountInfo() {
-    Account.accountNumber = AccountInfoInteger(ACCOUNT_LOGIN);
-    Account.accountName = AccountInfoString(ACCOUNT_NAME);
-    Account.server = AccountInfoString(ACCOUNT_SERVER);
-    Account.leverage = (int)AccountInfoInteger(ACCOUNT_LEVERAGE);
-    Account.balance = AccountInfoDouble(ACCOUNT_BALANCE);
-    Account.equity = AccountInfoDouble(ACCOUNT_EQUITY);
-    Account.margin = AccountInfoDouble(ACCOUNT_MARGIN);
-    Account.freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-    Account.currency = AccountInfoString(ACCOUNT_CURRENCY);
-    Account.lastPing = (int)TerminalInfoInteger(TERMINAL_PING_LAST);
-    Account.lastUpdate = TimeCurrent();
-}
-
-//+------------------------------------------------------------------+
-//| Update Market Data                                               |
-//+------------------------------------------------------------------+
-void UpdateMarketData() {
-    Market.spread = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
-    Market.ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-    Market.bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    Market.isMarketOpen = (bool)!SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE);
-    Market.serverTime = TimeCurrent();
-}
-
-//+------------------------------------------------------------------+
-//| Show Debug Information                                           |
-//+------------------------------------------------------------------+
-void ShowDebugInfo() {
-    string debug = "\n=== MultiStrategy Pro EA ===\n";
-    
-    // Time Information
-    debug += StringFormat("Server Time: %s\n", TimeToString(Market.serverTime, TIME_DATE|TIME_SECONDS));
-    debug += StringFormat("Running Time: %s\n\n", GetRunningTime());
-    
-    // Account Information
-    debug += "=== Account Information ===\n";
-    debug += StringFormat("Number: %d\n", Account.accountNumber);
-    debug += StringFormat("Name: %s\n", Account.accountName);
-    debug += StringFormat("Server: %s\n", Account.server);
-    debug += StringFormat("Leverage: 1:%d\n", Account.leverage);
-    debug += StringFormat("Balance: %.2f %s\n", Account.balance, Account.currency);
-    debug += StringFormat("Equity: %.2f %s\n", Account.equity, Account.currency);
-    debug += StringFormat("Free Margin: %.2f %s\n", Account.freeMargin, Account.currency);
-    debug += StringFormat("Ping: %d ms\n\n", Account.lastPing);
-    
-    // Market Information
-    debug += "=== Market Information ===\n";
-    debug += StringFormat("Symbol: %s\n", _Symbol);
-    debug += StringFormat("Spread: %d points\n", Market.spread);
-    debug += StringFormat("Ask/Bid: %.5f / %.5f\n", Market.ask, Market.bid);
-    debug += StringFormat("Market Status: %s\n\n", Market.isMarketOpen ? "Open" : "Closed");
-    
-    // Trading Statistics
-    debug += "=== Trading Statistics ===\n";
-    debug += StringFormat("Total Trades: %d\n", Stats.totalTrades);
-    debug += StringFormat("Total Volume: %.2f lots\n", Stats.totalLots);
-    debug += StringFormat("Current Profit: %.2f %s\n", Account.equity - Account.balance, Account.currency);
-    debug += StringFormat("Win Rate: %.1f%%\n", GetWinRate());
-    
-    Comment(debug);
-}
-
-//+------------------------------------------------------------------+
-//| Helper Functions                                                  |
-//+------------------------------------------------------------------+
-string GetRunningTime() {
-    int seconds = (int)(TimeCurrent() - Stats.startTime);
-    int hours = seconds / 3600;
-    int minutes = (seconds % 3600) / 60;
-    seconds = seconds % 60;
-    
-    return StringFormat("%02d:%02d:%02d", hours, minutes, seconds);
-}
-
-double GetWinRate() {
-    if(Stats.totalTrades == 0) return 0;
-    return (double)Stats.winTrades / Stats.totalTrades * 100;
-}
-
-bool CanTrade() {
-    if(Market.spread > InpMaxSpread) return false;
-    if(!Market.isMarketOpen) return false;
-    if(Account.freeMargin < Market.marginRequired) return false;
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Calculate Position Size                                          |
-//+------------------------------------------------------------------+
-double CalculatePositionSize() {
-    double riskAmount = Account.balance * InpRiskPercent / 100;
-    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-    
-    double lotSize = NormalizeDouble(riskAmount / (InpStopLoss * tickValue), 2);
-    lotSize = MathMax(lotSize, Market.minLot);
-    lotSize = MathMin(lotSize, Market.maxLot);
-    lotSize = NormalizeDouble(lotSize / Market.stepLot, 0) * Market.stepLot;
-    
-    return lotSize;
-}
-
-//+------------------------------------------------------------------+
-//| Process Trading Logic                                            |
-//+------------------------------------------------------------------+
-void ProcessTrading() {
-    // Check for breakout
-    if(CheckBreakout()) {
-        if(InpShowAlerts) Alert("Breakout detected");
-        double lotSize = CalculatePositionSize();
-        OpenPosition(lotSize, OP_BUY);  // Example for buy breakout
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Check Breakout                                                    |
-//+------------------------------------------------------------------+
-bool CheckBreakout() {
-    double upperBand = iBands(_Symbol, InpTimeframe, 20, 0, 0, PRICE_CLOSE, MODE_UPPER, 0);
-    double lowerBand = iBands(_Symbol, InpTimeframe, 20, 0, 0, PRICE_CLOSE, MODE_LOWER, 0);
-    
-    if(Close[1] > upperBand) {
-        return true;  // Breakout upward
-    } else if(Close[1] < lowerBand) {
-        return true;  // Breakout downward
-    }
-    return false;
-}
-
-//+------------------------------------------------------------------+
-//| Open Position                                                    |
-//+------------------------------------------------------------------+
-void OpenPosition(double lotSize, int type) {
-    if(type == OP_BUY) {
-        // Buy order
-        int ticket = OrderSend(_Symbol, OP_BUY, lotSize, Market.ask, 3, 0, 0, "Breakout", MAGIC_NUMBER, 0, Blue);
-        if(ticket < 0) {
-            Print("Error opening order: ", GetLastError());
+    if(currentSignal != SIGNAL_NONE) {
+        // Close existing pending orders
+        for(int i = OrdersTotal() - 1; i >= 0; i--) {
+            if(OrderSelect(i, SELECT_BY_POS)) {
+                if(OrderType() == OP_BUYSTOP || OrderType() == OP_SELLSTOP) {
+                    OrderDelete(OrderTicket());
+                }
+            }
         }
-    } else if(type == OP_SELL) {
-        // Sell order
-        int ticket = OrderSend(_Symbol, OP_SELL, lotSize, Market.bid, 3, 0, 0, "Breakout", MAGIC_NUMBER, 0, Red);
-        if(ticket < 0) {
-            Print("Error opening order: ", GetLastError());
-        }
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Trade Event Handler                                              |
-//+------------------------------------------------------------------+
-void OnTrade() {
-    // Update trading statistics here
-    UpdateTradeStats();
-}
-
-//+------------------------------------------------------------------+
-//| Update Trade Statistics                                          |
-//+------------------------------------------------------------------+
-void UpdateTradeStats() {
-    // Implementation for updating trade statistics
-    Stats.totalTrades = HistoryDealsTotal();
-    Stats.totalLots = 0;
-    Stats.winTrades = 0;
-    Stats.lossTrades = 0;
-    
-    for(int i = 0; i < Stats.totalTrades; i++) {
-        ulong ticket = HistoryDealGetTicket(i);
-        if(ticket <= 0) continue;
         
-        if(HistoryDealGetInteger(ticket, DEAL_ENTRY) == DEAL_ENTRY_OUT) {
-            double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
-            double volume = HistoryDealGetDouble(ticket, DEAL_VOLUME);
-            
-            Stats.totalLots += volume;
-            if(profit > 0) Stats.winTrades++;
-            if(profit < 0) Stats.lossTrades++;
-        }
+        // Place new pending orders
+        PlacePendingOrders(currentSignal);
     }
 }
