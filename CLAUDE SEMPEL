@@ -24,6 +24,7 @@ input bool   EnableDebugInfo    = true;    // Enable Debug Information
 input double StopLossPoints     = 30;      // Fixed Stop Loss (points)
 input double TrailingStopPoints = 20;      // Trailing Stop (points)
 input double BreakEvenPoints    = 10;      // Break Even (points)
+input double MaxSpreadPoints    = 5;       // Maximum Spread (points)
 
 // Global Variables for Debug Info
 string   g_DebugInfo = "";
@@ -269,6 +270,30 @@ void PlacePendingOrders(ENUM_SIGNAL_TYPE signal) {
 }
 
 //+------------------------------------------------------------------+
+//| Manage Pending Orders                                            |
+//+------------------------------------------------------------------+
+void ManagePendingOrders() {
+    double currentSpread = SymbolInfoInteger(Symbol(), SYMBOL_SPREAD) * Point();
+    
+    // If spread is too high, cancel pending orders
+    if(currentSpread > MaxSpreadPoints * Point) {
+        for(int i = OrdersTotal() - 1; i >= 0; i--) {
+            if(OrderSelect(i, SELECT_BY_POS)) {
+                if(OrderType() == OP_BUYSTOP || OrderType() == OP_SELLSTOP) {
+                    OrderDelete(OrderTicket());
+                }
+            }
+        }
+    } else {
+        // If spread is normal, place orders based on current signal
+        ENUM_SIGNAL_TYPE currentSignal = CheckSignals();
+        if(currentSignal != SIGNAL_NONE) {
+            PlacePendingOrders(currentSignal);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
 //| Manage Open Orders                                               |
 //+------------------------------------------------------------------+
 void ManageOpenOrders() {
@@ -325,24 +350,8 @@ void OnDeinit(const int reason) {
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick() {
-    ENUM_SIGNAL_TYPE currentSignal = CheckSignals();
-    
-    // Update debug info on every tick
-    UpdateDebugInfo(currentSignal);
-    
-    if(currentSignal != SIGNAL_NONE) {
-        // Close existing pending orders
-        for(int i = OrdersTotal() - 1; i >= 0; i--) {
-            if(OrderSelect(i, SELECT_BY_POS)) {
-                if(OrderType() == OP_BUYSTOP || OrderType() == OP_SELLSTOP) {
-                    OrderDelete(OrderTicket());
-                }
-            }
-        }
-        
-        // Place new pending orders
-        PlacePendingOrders(currentSignal);
-    }
+    // Manage pending orders based on spread and signal
+    ManagePendingOrders();
     
     // Manage open orders
     ManageOpenOrders();
