@@ -1,716 +1,915 @@
 //+------------------------------------------------------------------+
-//|                                               GeminiKuBreak.mq5    |
-//|                                                         Gemini AI  |
-//|                                             https://www.google.com |
+//| Expert advisor program code                                      |
+//| Name: GeminiKuBreak.mq5                                         |
+//| Author: Gemini AI                                                 |
+//| Description: Breakout Expert Advisor based on High/Low levels,   |
+//|              Candlestick Patterns, and ATR/Donchian SL/TP        |
 //+------------------------------------------------------------------+
-#property copyright "Gemini AI"
-#property link      "https://www.google.com"
-#property version   "1.00"
+#property copyright   "Gemini AI"
+#property link        ""
+#property version     "1.0"
+#property description "Breakout Expert Advisor based on High/Low levels and Candlestick Patterns"
 
-// Include required MQL5 files
 #include <Trade\Trade.mqh>
-#include <Trade\SymbolInfo.mqh>
+#include <Trade\SymbolInfo.mqh> // Menambahkan include untuk CSymbolInfo
+#include <stdlib.mqh>           // Untuk ErrorDescription()
 
-// Define custom object constants
-#define CUSTOM_TEXT_UP    "\x25B2"  // Up arrow
-#define CUSTOM_TEXT_DOWN  "\x25BC"  // Down arrow
-
-//--- Enum Declarations
-enum ENUM_DONCHIAN_PERIOD_ADAPTATION {
-    DONCHIAN_NONE,         // No Period Adaptation
-    DONCHIAN_ATR_ADAPTIVE  // ATR-based Adaptation
+//--- Deklarasi Enum dan Parameter Input ---
+enum ENUM_SLTP_METHOD {
+    MANUAL,              // Manual Fixed SL/TP
+    DONCHIAN_SLTP,       // Donchian Channel Based SL/TP
+    ATR_SLTP             // ATR Based SL/TP
 };
 
-enum ENUM_BREAKOUT_CANDLE_PATTERN {
-    ANY_BULLISH,          // Any Bullish Pattern
-    ANY_BEARISH,          // Any Bearish Pattern
-    ENGULFING_BULLISH,    // Bullish Engulfing
-    ENGULFING_BEARISH,    // Bearish Engulfing
-    MARUBOZU_BULLISH,     // Bullish Marubozu
-    MARUBOZU_BEARISH,     // Bearish Marubozu
-    CUSTOM_PATTERN        // Custom Pattern
+enum ENUM_CANDLE_PATTERNS {
+    ENGULFING_BULLISH,    // Bullish Engulfing Pattern
+    ENGULFING_BEARISH,    // Bearish Engulfing Pattern
+    NONE                 // No Candlestick Pattern Confirmation
 };
 
-enum ENUM_TIME_BASED_EXIT_DURATION {
-    HOURS_1,              // 1 Hour
-    HOURS_2,              // 2 Hours
-    HOURS_4,              // 4 Hours
-    HOURS_8,              // 8 Hours
-    HOURS_12,             // 12 Hours
-    HOURS_24,             // 24 Hours
-    CUSTOM_HOURS          // Custom Hours
-};
+//--- Parameter Input ---
+input group "General Settings";
+input int      InpMagicNumber = 123456;      // Magic Number
+input string   InpTradeComment = "GeminiKuBreak"; // Trade Comment
+input ENUM_TIMEFRAMES InpLowTimeframe = PERIOD_M15; // Trading Timeframe
+input ENUM_TIMEFRAMES Inp_HighLowTimeframe = PERIOD_H1; // Timeframe for High/Low Levels
+input double   InpLots = 0.01;               // Base Lot Size
+input double   InpMaxRiskPercent = 2.0;      // Maximum Risk per Trade (%)
 
-enum ENUM_POSITION_SIZE_TYPE {
-    FIXED_LOT,           // Fixed Lot Size
-    RISK_PERCENTAGE      // Risk Percentage
-};
+input group "Breakout Signal Settings";
+input bool     InpUseCandlePatternConfirmation = true; // Use Candlestick Pattern Confirmation (true)
+input ENUM_CANDLE_PATTERNS InpBuyPattern = ENGULFING_BULLISH; // Buy Candlestick Pattern
+input ENUM_CANDLE_PATTERNS InpSellPattern = ENGULFING_BEARISH; // Sell Candlestick Pattern
+input bool     InpUseVolumeFilter = false;     // Use Volume Filter (false)
+input double   InpVolumeThresholdMultiplier = 1.5; // Volume Threshold Multiplier
 
-//--- Input Parameters
-input group "Timeframe Settings"
-input ENUM_TIMEFRAMES InpHighTimeframe = PERIOD_D1;     // Analysis Timeframe
-input ENUM_TIMEFRAMES InpLowTimeframe = PERIOD_M5;      // Execution Timeframe
+input group "Donchian Channel Settings";
+input int      InpDonchianPeriod = 20;         // Donchian Channel Period (20)
+input bool     InpUseDonchianAtrLikeSlTp = true;      // Use ATR-like SL/TP for Donchian (true)
 
-input group "Donchian Channel Settings"
-input int InpDonchianPeriod = 20;                       // Donchian Period
-input ENUM_DONCHIAN_PERIOD_ADAPTATION InpDonchianAdaptation = DONCHIAN_ATR_ADAPTIVE; // Donchian Adaptation
-input int InpDonchianAtrPeriod = 14;                    // ATR Period for Adaptation
-input double InpDonchianMultiplier = 1.0;               // Donchian Multiplier
+input group "ATR Settings";
+input int      InpAtrPeriod = 14;              // ATR Period (14)
+input double   InpAtrSlMultiplier = 2.0;       // ATR SL Multiplier (2.0)
+input double   InpAtrTpMultiplier = 3.0;       // ATR TP Multiplier (3.0)
 
-input group "Breakout Pattern Settings"
-input ENUM_BREAKOUT_CANDLE_PATTERN InpBuyPattern = ANY_BULLISH;    // Buy Pattern
-input ENUM_BREAKOUT_CANDLE_PATTERN InpSellPattern = ANY_BEARISH;   // Sell Pattern
+input group "Stop Loss Settings";
+input ENUM_SLTP_METHOD InpSLTPMethod = ATR_SLTP;         // SL/TP Method (ATR, DONCHIAN_SLTP, MANUAL)
+input bool     InpUseFixedSL = false;          // Use Fixed Stop Loss (false)
+input int      InpFixedSLPips = 50;            // Fixed Stop Loss Pips (50)
+input bool     InpUseAtrSL = true;           // Use ATR for Stop Loss (true)
 
-input group "Volume Settings"
-input bool InpUseVolumeFilter = false;                  // Use Volume Filter
-input int InpVolumeAvgPeriod = 20;                      // Volume Average Period
+input group "Take Profit Settings";
+input bool     InpUseFixedTP = false;          // Use Fixed Take Profit (false)
+input int      InpFixedTPPips = 100;           // Fixed Take Profit Pips (100)
+input bool     InpUseAtrTP = true;           // Use ATR for Take Profit (true)
 
-input group "Stop Loss Settings"
-input bool InpUseAtrSL = true;                          // Use ATR Stop Loss
-input int InpAtrSlPeriod = 14;                          // ATR SL Period
-input double InpAtrSlMultiplier = 2.0;                  // ATR SL Multiplier
-input bool InpUseFixedSL = false;                       // Use Fixed Stop Loss
-input int InpFixedSLPips = 20;                          // Fixed SL in Pips
+input group "Trailing Stop Settings";
+input bool     InpUseTrailingStop = false;     // Use Trailing Stop (false)
+input int      InpTrailingStopPips = 30;       // Trailing Stop Pips (30)
+input int      InpTrailingStepPips = 5;        // Trailing Step Pips (5)
 
-input group "Take Profit Settings"
-input bool InpUseAtrTP = false;                         // Use ATR Take Profit
-input int InpAtrTpPeriod = 14;                          // ATR TP Period
-input double InpAtrTpMultiplier = 3.0;                  // ATR TP Multiplier
-input bool InpUseFixedTP = false;                       // Use Fixed Take Profit
-input int InpFixedTPPips = 50;                          // Fixed TP in Pips
+input group "Break Even Settings";
+input bool     InpUseBreakEven = false;        // Use Break Even (false)
+input int      InpBreakEvenPips = 20;         // Break Even Trigger Pips (20)
+input int      InpBreakEvenPipsToLock = 5;    // Pips to Lock in Profit at Break Even (5)
 
-input group "Position Sizing"
-input ENUM_POSITION_SIZE_TYPE InpPositionSizeType = RISK_PERCENTAGE; // Position Size Type
-input double InpRiskPercent = 1.0;                      // Risk Percentage
-input double InpFixedLotSize = 0.1;                     // Fixed Lot Size
+input group "Spread Settings";
+input int      InpMaxSpread = 30;            // Maximum Spread in Points (30)
 
-// Added missing time-based exit inputs
-input group "Time-Based Exit"
-input bool InpUseTimeBasedExit = false;                 // Use Time-Based Exit
-input ENUM_TIME_BASED_EXIT_DURATION InpTimeBasedExitDuration = HOURS_4; // Exit Duration
-input double InpCustomExitHours = 6.0;                  // Custom Exit Hours
 
-// Added missing trailing stop inputs
-input group "Trailing Stop Settings"
-input bool InpUseTrailingStop = false;                  // Use Trailing Stop
-input int InpTrailingActivationPips = 20;               // Activation Distance (Pips)
-input double InpAtrTrailingMultiplier = 1.5;            // ATR Trailing Multiplier
-
-input group "Expert Settings"
-input int InpMagicNumber = 123456;                      // Magic Number
-input string InpTradeComment = "GeminiBreakout";        // Trade Comment
-
-//--- Global Variables
-CTrade trade;                   // Trading object
-CSymbolInfo symbolInfo;         // Symbol information object
-datetime lastBarTime = 0;       // Last processed bar time
-int donchianHandle = INVALID_HANDLE;  // Donchian indicator handle
-int atrHandle = INVALID_HANDLE;       // ATR indicator handle
 //+------------------------------------------------------------------+
-//| Custom Indicator Handles and Buffers                              |
+//| Global Variables                                                  |
 //+------------------------------------------------------------------+
+CTrade         trade;
+CSymbolInfo    symbolInfo; // Deklarasi yang benar setelah include
+ENUM_TIMEFRAMES lowTimeframe;
+ENUM_TIMEFRAMES highLowTimeframe;
+ENUM_TIMEFRAMES period_current;   // Current chart timeframe
+
+
+//+------------------------------------------------------------------+
+//| Indicator Handles and Buffers                                     |
+//+------------------------------------------------------------------+
+int    donchianHandle = INVALID_HANDLE;
 double donchianUpperBuffer[];
 double donchianLowerBuffer[];
+int    atrHandle = INVALID_HANDLE;
 double atrBuffer[];
+double highBuffer[];                   // Buffer to store high prices for HighLow timeframe
+double lowBuffer[];                    // Buffer to store low prices for HighLow timeframe
+double openHighLowBuffer[];            // Buffer to store open prices for HighLow timeframe
+
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
-int OnInit() {
-    // Initialize trading object
-    trade.SetExpertMagicNumber(InpMagicNumber);
-    trade.SetMarginMode();
-    trade.SetTypeFillingBySymbol(Symbol());
-    trade.SetDeviationInPoints(10); // Slippage
+int OnInit()
+{
+    //--- Initialize trading object
+    symbolInfo.Name(Symbol());
+    symbolInfo.RefreshRates();
 
-    // Initialize symbol info object
-    if(!symbolInfo.Name(Symbol())) {
-        Print("OnInit: Error initializing symbol info. Error code: ", GetLastError());
-        return INIT_FAILED;
+    lowTimeframe = InpLowTimeframe;
+    highLowTimeframe = Inp_HighLowTimeframe;
+    period_current   = Period();
+
+    Print("OnInit: Expert initialized for symbol ", Symbol(), " timeframe ", EnumToString(period_current));
+    Print("OnInit: Trading Timeframe set to ", EnumToString(lowTimeframe));
+    Print("OnInit: HighLow Timeframe set to ", EnumToString(highLowTimeframe));
+
+    //--- Allocate arrays for indicator buffers (set as timeseries for easy access to previous values)
+    ArraySetAsSeries(donchianUpperBuffer,true);
+    ArraySetAsSeries(donchianLowerBuffer,true);
+    ArraySetAsSeries(atrBuffer,true);
+    ArraySetAsSeries(highBuffer, true);
+    ArraySetAsSeries(lowBuffer, true);
+    ArraySetAsSeries(openHighLowBuffer, true);
+
+    //--- Create handles for custom indicators
+    if(!CreateIndicatorHandles())
+    {
+        Print("OnInit: Failed to create indicator handles. Error code: ",GetLastError());
+        return(INIT_FAILED);
     }
+    Print("OnInit: Indicator handles created successfully");
 
-    // Create indicator handles with proper error checking
-    donchianHandle = iCustom(Symbol(), InpHighTimeframe, "Free Indicators\\Donchian Channel",  // <-- JALUR INDIKATOR DIPERBAIKI (PENTING!)
-                           InpDonchianPeriod);
-
-    if(donchianHandle == INVALID_HANDLE) {
-        Print("OnInit: Failed to create Donchian Channels indicator. Error code: ", GetLastError());
-        return INIT_FAILED;
-    } else {
-        Print("OnInit: Donchian indicator handle created successfully: ", donchianHandle);
+    //--- Check for valid input parameters
+    if(!CheckInputParameters())
+    {
+        Print("OnInit: Invalid input parameters. Please check the expert properties.");
+        return(INIT_FAILED);
     }
+    Print("OnInit: Input parameters are valid");
 
-    atrHandle = iATR(Symbol(), InpHighTimeframe, InpDonchianAtrPeriod);
-    if(atrHandle == INVALID_HANDLE) {
-        Print("OnInit: Failed to create ATR indicator. Error code: ", GetLastError());
-        return INIT_FAILED;
-    } else {
-        Print("OnInit: ATR indicator handle created successfully: ", atrHandle);
-    }
-
-    // Allocate arrays for indicator buffers
-    ArraySetAsSeries(donchianUpperBuffer, true);
-    ArraySetAsSeries(donchianLowerBuffer, true);
-    ArraySetAsSeries(atrBuffer, true);
-
-    Print("OnInit: EA initialized successfully");
-    EventSetTimer(1);
+    Print("OnInit: Initialization completed successfully");
     return(INIT_SUCCEEDED);
 }
+
 
 //+------------------------------------------------------------------+
 //| Expert deinitialization function                                  |
 //+------------------------------------------------------------------+
-void OnDeinit(const int reason) {
-    // Release indicator handles
-    if(donchianHandle != INVALID_HANDLE) IndicatorRelease(donchianHandle);
-    if(atrHandle != INVALID_HANDLE) IndicatorRelease(atrHandle);
-
-    // Clean up chart objects
-    ObjectsDeleteAll(0, "GeminiBreakout");
-
-    Comment(""); // Clear comments
+void OnDeinit(const int reason)
+{
+    Print("OnDeinit: Expert deinitialized, reason: ", GetDeinitReasonString(reason));
+    //--- Release indicator handles if they are valid
+    ReleaseIndicatorHandles();
+    Print("OnDeinit: Indicator handles released");
 }
+
 
 //+------------------------------------------------------------------+
 //| Expert tick function                                              |
 //+------------------------------------------------------------------+
-void OnTick() {
-    Print("OnTick: Start of OnTick function");
-    Print("OnTick: Donchian Handle: ", donchianHandle, ", ATR Handle: ", atrHandle);
-
-    // Check for new bar
-    if(!IsNewBar()) {
-        Print("OnTick: No new bar, exiting OnTick");
-        return;
+void OnTick()
+{
+    //--- Check for new bar on trading timeframe
+    if(IsNewBar(lowTimeframe))
+    {
+        Print("OnTick: New bar detected on Trading Timeframe ", EnumToString(lowTimeframe));
+        //--- Update indicator values
+        if(!UpdateIndicators())
+        {
+            Print("OnTick: UpdateIndicators() failed, exiting OnTick");
+            return;
+        }
+        //--- Check trading signals and execute orders
+        CheckForTradingSignals();
     }
-    Print("OnTick: New bar detected");
 
-    // Update indicators
-    if(!UpdateIndicators()) {
-        Print("OnTick: UpdateIndicators failed, exiting OnTick");
-        return;
-    }
-    Print("OnTick: UpdateIndicators successful");
-
-    // --- Pemanggilan ShowDebugInfo() dipindahkan ke sini, setelah UpdateIndicators() ---
-    ShowDebugInfo();
-
-    // Check for open positions
-    if(PositionsTotal() > 0) {
-        Print("OnTick: PositionsTotal > 0, calling ManageOpenPositions");
-        ManageOpenPositions();
-        Print("OnTick: ManageOpenPositions completed, exiting OnTick");
-        return;
-    }
-    Print("OnTick: No open positions, proceeding to CheckForTradingSignals");
-
-    // Check for trading conditions
-    CheckForTradingSignals();
-    Print("OnTick: CheckForTradingSignals completed, exiting OnTick");
+    //--- Trailing stop and Break Even functionality (if enabled)
+    HandleTrailingStop();
 }
 
-//+------------------------------------------------------------------+
-//| Check if we have a new bar                                        |
-//+------------------------------------------------------------------+
-bool IsNewBar() {
-    static datetime lastBar = 0;
-    datetime currentBar = iTime(Symbol(), InpLowTimeframe, 0);
-
-    if(lastBar != currentBar) {
-        lastBar = currentBar;
-        return true;
-    }
-    return false;
-}
 
 //+------------------------------------------------------------------+
 //| Update indicator values                                           |
 //+------------------------------------------------------------------+
-bool UpdateIndicators() {
+bool UpdateIndicators()
+{
     Print("UpdateIndicators: Updating indicators...");
 
-    // Clear previous values
-    ArrayInitialize(donchianUpperBuffer, 0);
-    ArrayInitialize(donchianLowerBuffer, 0);
-    ArrayInitialize(atrBuffer, 0);
+    //--- Clear previous indicator values before updating with new data
+    ArrayInitialize(donchianUpperBuffer,0);
+    ArrayInitialize(donchianLowerBuffer,0);
+    ArrayInitialize(atrBuffer,0);
+    ArrayInitialize(highBuffer, 0);
+    ArrayInitialize(lowBuffer, 0);
+    ArrayInitialize(openHighLowBuffer, 0);
 
-    // Copy indicator data with detailed error checking
-    int copiedDonchianUpper = CopyBuffer(donchianHandle, 0, 0, 10, donchianUpperBuffer);
-    if(copiedDonchianUpper < 10) {
-        Print("UpdateIndicators: Failed to copy Donchian Upper buffer. Error code: ", GetLastError(),
-              " Copied: ", copiedDonchianUpper);
+    //--- Copy indicator buffers from indicators to EA buffers
+    int copiedDonchianUpper = CopyBuffer(donchianHandle,0,0,2,donchianUpperBuffer); // Copy Donchian Upper Band for 2 bars
+    if(copiedDonchianUpper < 2)
+    {
+        Print("UpdateIndicators: Failed to copy Donchian Upper buffer. Error code: ",GetLastError(), " Copied: ", copiedDonchianUpper);
+        return(false);
+    }
+    int copiedDonchianLower = CopyBuffer(donchianHandle,1,0,2,donchianLowerBuffer); // Copy Donchian Lower Band for 2 bars
+    if(copiedDonchianLower < 2)
+    {
+        Print("UpdateIndicators: Failed to copy Donchian Lower buffer. Error code: ",GetLastError(), " Copied: ", copiedDonchianLower);
+        return(false);
+    }
+    int copiedAtr = CopyBuffer(atrHandle,0,0,2,atrBuffer); // Copy ATR values for 2 bars
+    if(copiedAtr < 2)
+    {
+        Print("UpdateIndicators: Failed to copy ATR buffer. Error code: ",GetLastError(), " Copied: ", copiedAtr);
+        return(false);
+    }
+
+    //--- Copy High, Low, and Open Prices for the selected HighLow Timeframe for the last 2 bars
+    int copiedHighs = CopyHigh(Symbol(), highLowTimeframe, 0, 2, highBuffer);
+    if(copiedHighs < 2)
+    {
+        Print("UpdateIndicators: Failed to copy High prices for HighLow Timeframe. Error code: ", GetLastError(), " Copied: ", copiedHighs);
+        return false;
+    }
+    int copiedLows = CopyLow(Symbol(), highLowTimeframe, 0, 2, lowBuffer);
+    if(copiedLows < 2)
+    {
+        Print("UpdateIndicators: Failed to copy Low prices for HighLow Timeframe. Error code: ", GetLastError(), " Copied: ", copiedLows);
+        return false;
+    }
+    int copiedOpens = CopyOpen(Symbol(), highLowTimeframe, 0, 2, openHighLowBuffer);
+    if(copiedOpens < 2)
+    {
+        Print("UpdateIndicators: Failed to copy Open prices for HighLow Timeframe. Error code: ", GetLastError(), " Copied: ", copiedOpens);
         return false;
     }
 
-    int copiedDonchianLower = CopyBuffer(donchianHandle, 1, 0, 10, donchianLowerBuffer);
-    if(copiedDonchianLower < 10) {
-        Print("UpdateIndicators: Failed to copy Donchian Lower buffer. Error code: ", GetLastError(),
-              " Copied: ", copiedDonchianLower);
-        return false;
-    }
-
-    int copiedATR = CopyBuffer(atrHandle, 0, 0, 10, atrBuffer);
-    if(copiedATR < 10) {
-        Print("UpdateIndicators: Failed to copy ATR buffer. Error code: ", GetLastError(),
-              " Copied: ", copiedATR);
-        return false;
-    }
 
     Print("UpdateIndicators: Indicators updated successfully");
     Print("UpdateIndicators: Donchian Upper[0]: ", donchianUpperBuffer[0]);
     Print("UpdateIndicators: Donchian Lower[0]: ", donchianLowerBuffer[0]);
     Print("UpdateIndicators: ATR[0]: ", atrBuffer[0]);
+    Print("UpdateIndicators: High[0] (HighLow TF): ", highBuffer[0]);
+    Print("UpdateIndicators: Low[0] (HighLow TF): ", lowBuffer[0]);
+    Print("UpdateIndicators: Open[0] (HighLow TF): ", openHighLowBuffer[0]);
 
-    return true;
+    return(true);
 }
+
+
+//+------------------------------------------------------------------+
+//| Check input parameters for validity                               |
+//+------------------------------------------------------------------+
+bool CheckInputParameters()
+{
+    if(InpLots<=0 || InpMaxRiskPercent<=0 || InpDonchianPeriod<=0 || InpAtrPeriod<=0 || InpAtrSlMultiplier<=0 || InpAtrTpMultiplier<=0)
+    {
+        Print("CheckInputParameters: Invalid input parameters detected.");
+        return(false);
+    }
+    if((InpUseFixedSL && InpFixedSLPips<=0) || (InpUseFixedTP && InpFixedTPPips<=0))
+    {
+        Print("CheckInputParameters: Fixed SL/TP Pips must be greater than zero if used.");
+        return(false);
+    }
+    if(InpUseTrailingStop && (InpTrailingStopPips<=0 || InpTrailingStepPips<=0))
+    {
+        Print("CheckInputParameters: Trailing Stop/Step Pips must be greater than zero if Trailing Stop is used.");
+        return(false);
+    }
+    if(InpBreakEvenPips < 0 || InpBreakEvenPipsToLock < 0)
+    {
+        Print("CheckInputParameters: Break Even Pips and Break Even Pips To Lock must be non-negative.");
+        return(false);
+    }
+    if(InpMaxSpread < 0)
+    {
+        Print("CheckInputParameters: Max Spread must be non-negative.");
+        return(false);
+    }
+    return(true);
+}
+
+
+//+------------------------------------------------------------------+
+//| Create indicator handles                                        |
+//+------------------------------------------------------------------+
+bool CreateIndicatorHandles()
+{
+    int error = 0;
+    //--- Donchian Channel handle
+    donchianHandle = iDonchian(Symbol(), Inp_HighLowTimeframe, InpDonchianPeriod); // Corrected iDonchian function call, using HighLow timeframe
+    if(donchianHandle==INVALID_HANDLE)
+    {
+        error = GetLastError();
+        Print("CreateIndicatorHandles: Error creating Donchian Channel indicator handle: ",ErrorDescription(error)," error=",error);
+        return(false);
+    }
+    //--- ATR handle
+    atrHandle = iATR(Symbol(), period_current, InpAtrPeriod); // Corrected iATR function call, using current chart timeframe
+    if(atrHandle==INVALID_HANDLE)
+    {
+        error = GetLastError();
+        Print("CreateIndicatorHandles: Error creating ATR indicator handle: ",ErrorDescription(error)," error=",error);
+        return(false);
+    }
+    return(true);
+}
+
+
+//+------------------------------------------------------------------+
+//| Release indicator handles                                         |
+//+------------------------------------------------------------------+
+void ReleaseIndicatorHandles()
+{
+    if(donchianHandle!=INVALID_HANDLE) IndicatorRelease(donchianHandle);
+    if(atrHandle!=INVALID_HANDLE)      IndicatorRelease(atrHandle);
+}
+
 
 //+------------------------------------------------------------------+
 //| Check for trading signals                                         |
 //+------------------------------------------------------------------+
-void CheckForTradingSignals() {
-    Print("CheckForTradingSignals: Start of CheckForTradingSignals function");
-
-    // Get current candle data
-    MqlRates rates[];
-    ArraySetAsSeries(rates, true);
-    int copiedRates = CopyRates(Symbol(), InpLowTimeframe, 0, 2, rates);
-    Print("CheckForTradingSignals: CopyRates returned: ", copiedRates);
-    if(copiedRates != 2) {
-        Print("CheckForTradingSignals: CopyRates failed, exiting CheckForTradingSignals");
-        return;
-    }
-    Print("CheckForTradingSignals: Rates array size: ", ArraySize(rates));
-    Print("CheckForTradingSignals: rates[0].close value: ", rates[0].close);
-
-    // --- Tambahkan pengecekan ukuran array buffer indikator ---
-    Print("CheckForTradingSignals: Donchian Upper Buffer Size BEFORE check: ", ArraySize(donchianUpperBuffer));
-    Print("CheckForTradingSignals: Donchian Lower Buffer Size BEFORE check: ", ArraySize(donchianLowerBuffer));
-    Print("CheckForTradingSignals: ATR Buffer Size BEFORE check: ", ArraySize(atrBuffer));
-
-    if(ArraySize(donchianUpperBuffer) < 1 || ArraySize(donchianLowerBuffer) < 1 || ArraySize(atrBuffer) < 1) {
-        Print("CheckForTradingSignals: Warning: Indicator buffers have insufficient size, skipping signal check.");
-        Print("CheckForTradingSignals: Donchian Upper Buffer Size: ", ArraySize(donchianUpperBuffer));
-        Print("CheckForTradingSignals: Donchian Lower Buffer Size: ", ArraySize(donchianLowerBuffer));
-        Print("CheckForTradingSignals: ATR Buffer Size: ", ArraySize(atrBuffer));
-        return; // Keluar dari fungsi jika buffer belum siap
-    }
-    // --- Batas pengecekan ukuran array buffer indikator ---
-    Print("CheckForTradingSignals: Indicator buffers size check passed.");
-    Print("CheckForTradingSignals: Donchian Upper Buffer Value [0] BEFORE valid check: ", donchianUpperBuffer[0]);
-    Print("CheckForTradingSignals: Donchian Lower Buffer Value [0] BEFORE valid check: ", donchianLowerBuffer[0]);
-
-    // --- Tambahkan pengecekan validitas nilai buffer indikator ---
-    if(!MathIsValidNumber(donchianUpperBuffer[0]) || !MathIsValidNumber(donchianLowerBuffer[0])) {
-        Print("CheckForTradingSignals: Warning: Invalid values in indicator buffers, skipping signal check.");
-        Print("CheckForTradingSignals: Donchian Upper Buffer Value [0]: ", donchianUpperBuffer[0]);
-        Print("CheckForTradingSignals: Donchian Lower Buffer Value [0]: ", donchianLowerBuffer[0]);
-        return; // Keluar dari fungsi jika nilai buffer tidak valid
-    }
-    // --- Batas pengecekan validitas nilai buffer indikator ---
-    Print("CheckForTradingSignals: Indicator buffers value check passed.");
-    Print("CheckForTradingSignals: Donchian Upper Buffer Value [0]: ", donchianUpperBuffer[0]);
-    Print("CheckForTradingSignals: Donchian Lower Buffer Value [0]: ", donchianLowerBuffer[0]);
-
+void CheckForTradingSignals()
+{
+    Print("CheckForTradingSignals: Checking for trading signals...");
 
     bool buySignal = false;
     bool sellSignal = false;
 
-    // Check buy conditions
-    Print("CheckForTradingSignals: Checking buy conditions");
-    Print("CheckForTradingSignals: Current price: ", rates[0].close); // Debug Print - Current Price
-    Print("CheckForTradingSignals: Donchian Upper: ", donchianUpperBuffer[0]); // Debug Print - Donchian Upper
-    if(rates[0].close > donchianUpperBuffer[0] &&
-       IsValidPattern(rates[0], rates[1], InpBuyPattern)) {
-        buySignal = true;
-        if(InpUseVolumeFilter) {
-            buySignal = IsVolumeValid(rates[0].tick_volume);
+    //--- Check for Buy Signal: Current Ask price breaks above previous High of HighLow timeframe
+    if(symbolInfo.Ask() > highBuffer[1])
+    {
+        Print("CheckForTradingSignals: Potential Buy Breakout detected");
+        if(IsBuyCandlePatternValid()) // Check for Candlestick Pattern Confirmation if enabled
+        {
+            Print("CheckForTradingSignals: Buy Candlestick Pattern Confirmation is valid");
+            if(IsVolumeConfirmationValid(ORDER_TYPE_BUY)) // Check for Volume Confirmation if enabled
+            {
+                Print("CheckForTradingSignals: Buy Volume Confirmation is valid");
+                buySignal = true; // Buy signal confirmed after all confirmations
+            }
+            else
+            {
+                Print("CheckForTradingSignals: Buy Volume Confirmation is NOT valid");
+            }
+        }
+        else
+        {
+            Print("CheckForTradingSignals: Buy Candlestick Pattern Confirmation is NOT valid");
         }
     }
-    Print("CheckForTradingSignals: Buy signal status: ", buySignal);
 
-    // Check sell conditions
-    Print("CheckForTradingSignals: Checking sell conditions");
-    Print("CheckForTradingSignals: Current price: ", rates[0].close); // Debug Print - Current Price
-    Print("CheckForTradingSignals: Donchian Lower: ", donchianLowerBuffer[0]); // Debug Print - Donchian Lower
-    if(rates[0].close < donchianLowerBuffer[0] &&
-       IsValidPattern(rates[0], rates[1], InpSellPattern)) {
-        sellSignal = true;
-        if(InpUseVolumeFilter) {
-            sellSignal = IsVolumeValid(rates[0].tick_volume);
+
+    //--- Check for Sell Signal: Current Bid price breaks below previous Low of HighLow timeframe
+    if(symbolInfo.Bid() < lowBuffer[1])
+    {
+        Print("CheckForTradingSignals: Potential Sell Breakout detected");
+        if(IsSellCandlePatternValid()) // Check for Candlestick Pattern Confirmation if enabled
+        {
+            Print("CheckForTradingSignals: Sell Candlestick Pattern Confirmation is valid");
+            if(IsVolumeConfirmationValid(ORDER_TYPE_SELL)) // Check for Volume Confirmation if enabled
+            {
+                Print("CheckForTradingSignals: Sell Volume Confirmation is valid");
+                sellSignal = true; // Sell signal confirmed after all confirmations
+            }
+            else
+            {
+                Print("CheckForTradingSignals: Sell Volume Confirmation is NOT valid");
+            }
+        }
+        else
+        {
+            Print("CheckForTradingSignals: Sell Candlestick Pattern Confirmation is NOT valid");
         }
     }
-    Print("CheckForTradingSignals: Sell signal status: ", sellSignal);
 
-    // Execute trades if signals are valid
-    if(buySignal) ExecuteOrder(ORDER_TYPE_BUY);
-    if(sellSignal) ExecuteOrder(ORDER_TYPE_SELL);
+
+    //--- Place pending orders if signals are valid
+    if(buySignal) PlacePendingOrder(ORDER_TYPE_BUY, highBuffer[1], lowBuffer[1]);
+    if(sellSignal) PlacePendingOrder(ORDER_TYPE_SELL, highBuffer[1], lowBuffer[1]);
     Print("CheckForTradingSignals: End of CheckForTradingSignals function");
 }
+
+
 //+------------------------------------------------------------------+
-//| Execute trading order                                             |
+//| Check if Buy Candlestick Pattern is Valid                       |
 //+------------------------------------------------------------------+
-void ExecuteOrder(ENUM_ORDER_TYPE orderType) {
-    Print("ExecuteOrder: Dipanggil untuk Order Type:", EnumToString(orderType)); // Tambahkan Print
-    double volume = CalculatePositionSize(orderType);
-    Print("ExecuteOrder: Volume dihitung:", volume); // Tambahkan Print
-    if(volume <= 0) {
-        Print("ExecuteOrder: Volume tidak valid, keluar dari fungsi"); // Tambahkan Print
-        return;
+bool IsBuyCandlePatternValid()
+{
+    if(!InpUseCandlePatternConfirmation) return(true); // If pattern confirmation is disabled, consider valid
+
+    ENUM_CANDLE_PATTERNS pattern = InpBuyPattern;
+
+    switch(pattern)
+    {
+        case ENGULFING_BULLISH:
+            //--- Placeholder: Add logic to detect Bullish Engulfing pattern if needed ---
+            Print("IsBuyCandlePatternValid: Bullish Engulfing pattern check - NOT IMPLEMENTED YET, returning TRUE"); // Placeholder
+            return(true); // <<< Placeholder - Implement Bullish Engulfing detection logic here >>>
+            break;
+        //--- Add cases for other Buy patterns if needed ---
+        case NONE:
+        default:
+            return(true); // No pattern selected or NONE, considered valid
+            break;
     }
+    return(false); // Default return false if no pattern matched and confirmation is enabled
+}
 
-    double entryPrice = (orderType == ORDER_TYPE_BUY) ?
-                        symbolInfo.Ask() : symbolInfo.Bid();
 
-    double stopLoss = CalculateStopLoss(orderType, entryPrice);
-    double takeProfit = CalculateTakeProfit(orderType, entryPrice, stopLoss);
+//+------------------------------------------------------------------+
+//| Check if Sell Candlestick Pattern is Valid                      |
+//+------------------------------------------------------------------+
+bool IsSellCandlePatternValid()
+{
+    if(!InpUseCandlePatternConfirmation) return(true); // If pattern confirmation is disabled, consider valid
 
-    Print("ExecuteOrder: Entry Price:", entryPrice, ", Stop Loss:", stopLoss, ", Take Profit:", takeProfit); // Tambahkan Print
+    ENUM_CANDLE_PATTERNS pattern = InpSellPattern;
 
-    // Set trade parameters
-    trade.SetExpertMagicNumber(InpMagicNumber);
-    trade.SetDeviationInPoints(10);
-
-    // Execute the trade
-    bool result = false;
-    if(orderType == ORDER_TYPE_BUY) {
-        result = trade.Buy(volume, Symbol(), entryPrice, stopLoss, takeProfit, InpTradeComment);
-        Print("ExecuteOrder: trade.Buy() dipanggil, hasil:", result); // Tambahkan Print
-    } else {
-        result = trade.Sell(volume, Symbol(), entryPrice, stopLoss, takeProfit, InpTradeComment);
-        Print("ExecuteOrder: trade.Sell() dipanggil, hasil:", result); // Tambahkan Print
+    switch(pattern)
+    {
+        case ENGULFING_BEARISH:
+            //--- Placeholder: Add logic to detect Bearish Engulfing pattern if needed ---
+            Print("IsSellCandlePatternValid: Bearish Engulfing pattern check - NOT IMPLEMENTED YET, returning TRUE"); // Placeholder
+            return(true); // <<< Placeholder - Implement Bearish Engulfing detection logic here >>>
+            break;
+        //--- Add cases for other Sell patterns if needed ---
+        case NONE:
+        default:
+            return(true); // No pattern selected or NONE, considered valid
+            break;
     }
+    return(false); // Default return false if no pattern matched and confirmation is enabled
+}
 
-    if(result) {
-        if(trade.ResultRetcode() == TRADE_RETCODE_DONE) {
-            Print("ExecuteOrder: Order berhasil dieksekusi. Ticket: ", trade.ResultOrder());
-        } else {
-            Print("ExecuteOrder: Order gagal dieksekusi. Error: ", trade.ResultRetcode());
-            //--- Call HandleTradingError function to handle trading errors
-            HandleTradingError(trade.ResultRetcode());
+
+//+------------------------------------------------------------------+
+//| Is Volume Confirmation Valid                                      |
+//+------------------------------------------------------------------+
+bool IsVolumeConfirmationValid(ENUM_ORDER_TYPE orderType)
+{
+    if(!InpUseVolumeFilter) return(true); // If volume filter is disabled, consider valid
+
+    MqlRates rates[];
+    if(CopyRates(Symbol(), lowTimeframe, 0, 21, rates) < 21) return false; // Copy rates for volumePeriod + 1 bars
+
+    long currentVolume = rates[0].tick_volume; // Volume of the current bar
+    long averageVolume = 0;
+    int  volumePeriod = 20; // Period for average volume calculation
+
+    //--- Calculate average volume over the past 'volumePeriod' bars
+    for(int i=1; i<=volumePeriod; i++) // Start from index 1 to exclude current bar
+    {
+        averageVolume += rates[i].tick_volume;
+    }
+    averageVolume = averageVolume / volumePeriod;
+
+    double volumeThreshold = averageVolume * InpVolumeThresholdMultiplier; // Threshold for volume confirmation
+
+    if(orderType == ORDER_TYPE_BUY)
+    {
+        if(currentVolume > volumeThreshold)
+        {
+            Print("IsVolumeConfirmationValid: Buy Volume Confirmation - Current Volume: ", currentVolume, ", Threshold: ", volumeThreshold, " - VALID");
+            return(true);
         }
-    } else {
-        Print("ExecuteOrder: trade.Buy()/trade.Sell() mengembalikan FALSE (gagal)"); // Tambahkan Print
+        else
+        {
+            Print("IsVolumeConfirmationValid: Buy Volume Confirmation - Current Volume: ", currentVolume, ", Threshold: ", volumeThreshold, " - NOT VALID");
+            return(false);
+        }
     }
-}
-
-//+------------------------------------------------------------------+
-//| Calculate position size based on risk management                   |
-//+------------------------------------------------------------------+
-double CalculatePositionSize(ENUM_ORDER_TYPE orderType) {
-    if(InpPositionSizeType == FIXED_LOT) {
-        return NormalizeVolume(InpFixedLotSize);
-    }
-
-    // Calculate based on risk percentage
-    double riskAmount = AccountInfoDouble(ACCOUNT_BALANCE) * (InpRiskPercent / 100.0);
-    double stopLossPoints = 0;
-
-    if(InpUseAtrSL) {
-        stopLossPoints = atrBuffer[0] * InpAtrSlMultiplier / Point();
-    } else if(InpUseFixedSL) {
-        stopLossPoints = InpFixedSLPips;
-    } else {
-        return NormalizeVolume(InpFixedLotSize); // Default to fixed lot if no SL
+    else if(orderType == ORDER_TYPE_SELL)
+    {
+        if(currentVolume > volumeThreshold)
+        {
+            Print("IsVolumeConfirmationValid: Sell Volume Confirmation - Current Volume: ", currentVolume, ", Threshold: ", volumeThreshold, " - VALID");
+            return(true);
+        }
+        else
+        {
+            Print("IsVolumeConfirmationValid: Sell Volume Confirmation - Current Volume: ", currentVolume, ", Threshold: ", volumeThreshold, " - NOT VALID");
+            return(false);
+        }
     }
 
-    if(stopLossPoints <= 0) return 0;
-
-    double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
-    double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-    double pointCost = tickValue * (Point() / tickSize);
-
-    double volume = riskAmount / (stopLossPoints * pointCost);
-    return NormalizeVolume(volume);
+    return(false); // Default return false if order type is not BUY or SELL
 }
 
-//+------------------------------------------------------------------+
-//| Normalize volume according to symbol settings                      |
-//+------------------------------------------------------------------+
-double NormalizeVolume(double volume) {
-    double minVolume = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
-    double maxVolume = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
-    double stepVolume = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
 
-    volume = MathFloor(volume / stepVolume) * stepVolume;
-    volume = MathMax(minVolume, MathMin(maxVolume, volume));
+//+------------------------------------------------------------------+
+//| Calculate position size based on risk percentage                 |
+//+------------------------------------------------------------------+
+double CalculatePositionSize(ENUM_ORDER_TYPE orderType)
+{
+    double balance = AccountInfoDouble(ACCOUNT_BALANCE); // Account balance
+    double riskPerTrade = balance * (InpMaxRiskPercent / 100.0); // Risk amount in account currency
 
-    return NormalizeDouble(volume, 2);
+    double stopLossPips;
+    if(InpSLTPMethod == ATR_SLTP)
+    {
+        stopLossPips = atrBuffer[0] * InpAtrSlMultiplier / Point(); // Stop Loss in pips based on ATR
+    }
+    else if(InpSLTPMethod == MANUAL)
+    {
+        stopLossPips = InpFixedSLPips; // Fixed Stop Loss in pips
+    }
+    else if (InpSLTPMethod == DONCHIAN_SLTP)
+    {
+        //--- For Donchian, estimate SL in pips based on ATR (approximation - adjust as needed) ---
+        stopLossPips = atrBuffer[0] * InpAtrSlMultiplier / Point(); // Approximation using ATR for Donchian SL
+    }
+    else
+    {
+        stopLossPips = InpFixedSLPips; // Default to Fixed SL pips if method is not recognized
+    }
+
+    if(stopLossPips <= 0)
+    {
+        Print("CalculatePositionSize: Stop Loss Pips is zero or negative, cannot calculate volume.");
+        return(0);
+    }
+
+    double pipsValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE) * Point(); // Value of 1 pip in account currency // Corrected Point() multiplication
+    double positionVolume = NormalizeDouble(riskPerTrade / (stopLossPips * pipsValue), 2); // Position volume in lots, normalized to 2 decimal places
+
+    Print("CalculatePositionSize: Balance = ", balance, ", Risk per trade = ", riskPerTrade, ", StopLoss Pips = ", stopLossPips, ", Pip Value = ", pipsValue, ", Calculated Volume = ", positionVolume);
+
+    //--- Ensure calculated volume is within allowed limits (minimum and maximum volume)
+    if(positionVolume < SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN))
+    {
+        positionVolume = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN); // Set to minimum volume if calculated volume is too low
+        Print("CalculatePositionSize: Calculated volume is less than minimum volume, setting to minimum volume: ", positionVolume);
+    }
+    if(positionVolume > SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX))
+    {
+        positionVolume = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX); // Set to maximum volume if calculated volume is too high
+        Print("CalculatePositionSize: Calculated volume exceeds maximum volume, setting to maximum volume: ", positionVolume);
+    }
+
+    return(positionVolume);
 }
+
 
 //+------------------------------------------------------------------+
 //| Calculate stop loss level                                         |
 //+------------------------------------------------------------------+
-double CalculateStopLoss(ENUM_ORDER_TYPE orderType, double entryPrice) {
-    if(!InpUseAtrSL && !InpUseFixedSL) return 0;
+double CalculateStopLoss(ENUM_ORDER_TYPE orderType, double entryPrice, double highLevel, double lowLevel)
+{
+    double stopLoss = 0;
 
-    double stopLossPoints;
-    if(InpUseAtrSL) {
-        stopLossPoints = atrBuffer[0] * InpAtrSlMultiplier;
-    } else {
-        stopLossPoints = InpFixedSLPips * Point();
+    if(InpSLTPMethod == ATR_SLTP)
+    { // ATR Stop Loss
+        if(!InpUseAtrSL && !InpUseFixedSL) return(0); // If neither ATR SL nor Fixed SL is enabled, return 0 SL
+
+        double stopLossPoints;
+        if(InpUseAtrSL)
+        {
+            stopLossPoints = atrBuffer[0] * InpAtrSlMultiplier; // SL based on ATR multiplier
+        }
+        else
+        {
+            stopLossPoints = InpFixedSLPips * Point(); // SL based on fixed pips
+        }
+
+        stopLoss = (orderType==ORDER_TYPE_BUY) ?
+                       entryPrice-stopLossPoints :
+                       entryPrice+stopLossPoints;
+    }
+    else if(InpSLTPMethod == MANUAL)
+    { // Manual Fixed Stop Loss
+        if(!InpUseFixedSL && !InpUseAtrSL) return(0); // Prioritize Fixed SL if MANUAL method is selected, fallback to ATR if Fixed SL is disabled
+
+        double stopLossPoints;
+        if(InpUseFixedSL)
+        {
+            stopLossPoints = InpFixedSLPips * Point(); // SL based on fixed pips
+        }
+        else
+        { // Fallback to ATR if Fixed SL is not used in MANUAL mode
+            stopLossPoints = atrBuffer[0] * InpAtrSlMultiplier; // SL based on ATR multiplier // Corrected: Removed Point() multiplication here
+        }
+
+        stopLoss = (orderType==ORDER_TYPE_BUY) ?
+                       entryPrice-stopLossPoints :
+                       entryPrice+stopLossPoints;
+
+
+    }
+    else if(InpSLTPMethod == DONCHIAN_SLTP)
+    { // Donchian Stop Loss
+        //--- Donchian SL Logic - MODIFIED with ATR-like option ---
+        if(InpUseDonchianAtrLikeSlTp)
+        { // Use ATR-like Donchian SL/TP (SL adjusted by ATR)
+            if(orderType==ORDER_TYPE_BUY)
+            {
+                stopLoss = donchianLowerBuffer[0]-(atrBuffer[0]*InpAtrSlMultiplier*0.5); // SL below Donchian Lower Band, ATR influenced
+            }
+            else
+            {
+                stopLoss = donchianUpperBuffer[0]+(atrBuffer[0]*InpAtrSlMultiplier*0.5); // SL above Donchian Upper Band, ATR influenced
+            }
+        }
+        else
+        { // Use original Donchian SL/TP (SL at Donchian band)
+            if(orderType==ORDER_TYPE_BUY)
+            {
+                stopLoss = donchianLowerBuffer[0]; // SL at Donchian Lower Band (ORIGINAL)
+            }
+            else
+            {
+                stopLoss = donchianUpperBuffer[0]; // SL at Donchian Upper Band (ORIGINAL)
+            }
+        }
     }
 
-    double stopLoss = (orderType == ORDER_TYPE_BUY) ?
-                      entryPrice - stopLossPoints :
-                      entryPrice + stopLossPoints;
-
-    return NormalizeDouble(stopLoss, Digits());
+    return((stopLoss!=0) ? NormalizeDouble(stopLoss,Digits()) : 0); // Normalize Stop Loss to symbol digits if not zero
 }
+
 
 //+------------------------------------------------------------------+
 //| Calculate take profit level                                       |
 //+------------------------------------------------------------------+
-double CalculateTakeProfit(ENUM_ORDER_TYPE orderType, double entryPrice, double stopLoss) {
-    if(!InpUseAtrTP && !InpUseFixedTP) return 0;
+double CalculateTakeProfit(ENUM_ORDER_TYPE orderType, double entryPrice, double stopLoss, double highLevel, double lowLevel)
+{
+    double takeProfit = 0;
 
-    double takeProfitPoints;
-    if(InpUseAtrTP) {
-        takeProfitPoints = atrBuffer[0] * InpAtrTpMultiplier;
-    } else {
-        takeProfitPoints = InpFixedTPPips * Point();
+    if(InpSLTPMethod == ATR_SLTP)
+    { // ATR Take Profit
+        if(!InpUseAtrTP && !InpUseFixedTP) return(0); // If neither ATR TP nor Fixed TP is enabled, return 0 TP
+
+        double takeProfitPoints;
+        if(InpUseAtrTP)
+        {
+            takeProfitPoints = atrBuffer[0] * InpAtrTpMultiplier; // TP based on ATR multiplier
+        }
+        else
+        {
+            takeProfitPoints = InpFixedTPPips * Point(); // TP based on fixed pips
+        }
+
+        takeProfit = (orderType==ORDER_TYPE_BUY) ?
+                       entryPrice+takeProfitPoints :
+                       entryPrice-takeProfitPoints;
+
+
+    }
+    else if(InpSLTPMethod == MANUAL)
+    { // Manual Fixed Take Profit
+        if(!InpUseFixedTP && !InpUseAtrTP) return(0); // Prioritize Fixed TP if MANUAL method is selected, fallback to ATR if Fixed TP is disabled
+
+        double takeProfitPoints;
+        if(InpUseFixedTP)
+        {
+            takeProfitPoints = InpFixedTPPips * Point(); // TP based on fixed pips
+        }
+        else
+        { // Fallback to ATR if Fixed TP is not used in MANUAL mode
+            takeProfitPoints = atrBuffer[0] * InpAtrTpMultiplier; // TP based on ATR multiplier // Corrected: Removed Point() multiplication here
+        }
+
+        takeProfit = (orderType==ORDER_TYPE_BUY) ?
+                       entryPrice+takeProfitPoints :
+                       entryPrice-takeProfitPoints;
+
+    }
+    else if(InpSLTPMethod == DONCHIAN_SLTP)
+    { // Donchian Take Profit
+        //--- Donchian TP Logic - MODIFIED with ATR-like option ---
+        if(InpUseDonchianAtrLikeSlTp)
+        { // Use ATR-like Donchian TP (TP adjusted by ATR)
+            if(orderType==ORDER_TYPE_BUY)
+            {
+                takeProfit = donchianUpperBuffer[0]+(atrBuffer[0]*InpAtrTpMultiplier*0.75); // TP above Donchian Upper Band, ATR influenced
+            }
+            else
+            {
+                takeProfit = donchianLowerBuffer[0]-(atrBuffer[0]*InpAtrTpMultiplier*0.75); // TP below Donchian Lower Band, ATR influenced
+            }
+        }
+        else
+        { // Use original Donchian TP (TP at Donchian band)
+            if(orderType==ORDER_TYPE_BUY)
+            {
+                takeProfit = donchianUpperBuffer[0]; // TP at Donchian Upper Band (ORIGINAL)
+            }
+            else
+            {
+                takeProfit = donchianLowerBuffer[0]; // TP at Donchian Lower Band (ORIGINAL)
+            }
+        }
     }
 
-    double takeProfit = (orderType == ORDER_TYPE_BUY) ?
-                        entryPrice + takeProfitPoints :
-                        entryPrice - takeProfitPoints;
-
-    return NormalizeDouble(takeProfit, Digits());
+    return((takeProfit!=0) ? NormalizeDouble(takeProfit,Digits()) : 0); // Normalize Take Profit to symbol digits if not zero
 }
 
+
 //+------------------------------------------------------------------+
-//| Check if candlestick pattern is valid                             |
+//| Place pending order                                             |
 //+------------------------------------------------------------------+
-bool IsValidPattern(const MqlRates &current, const MqlRates &previous,
-                   ENUM_BREAKOUT_CANDLE_PATTERN pattern) {
-    switch(pattern) {
-        case ANY_BULLISH:
-            return (current.close > current.open);
+void PlacePendingOrder(ENUM_ORDER_TYPE orderType, double highLevel, double lowLevel)
+{
+    Print("PlacePendingOrder: Called for Order Type:", EnumToString(orderType));
+    double volume = CalculatePositionSize(orderType); // Calculate position volume based on risk
+    Print("PlacePendingOrder: Calculated Volume:", volume);
+    if(volume <= 0)
+    {
+        Print("PlacePendingOrder: Invalid volume, exiting function");
+        return;
+    }
 
-        case ANY_BEARISH:
-            return (current.close < current.open);
+    //--- Check current spread against Max Spread ---
+    double currentSpread = SymbolInfoDouble(Symbol(), SYMBOL_SPREAD); // Get current spread in points
+    if(currentSpread > InpMaxSpread)
+    {
+        Print("PlacePendingOrder: Current spread (" + DoubleToString(currentSpread) + ") exceeds MaxSpread (" + IntegerToString(InpMaxSpread) + "). Order placing cancelled.");
+        return; // Cancel order placement if spread is too high
+    }
+    Print("PlacePendingOrder: Current spread is acceptable (" + DoubleToString(currentSpread) + " points). MaxSpread limit: " + IntegerToString(InpMaxSpread) + " points.");
 
-        case ENGULFING_BULLISH:
-            return (current.close > current.open &&
-                   previous.close < previous.open &&
-                   current.close > previous.open &&
-                   current.open < previous.close);
 
-        case ENGULFING_BEARISH:
-            return (current.close < current.open &&
-                   previous.close > previous.open &&
-                   current.close < previous.open &&
-                   current.open > previous.close);
+    double entryPrice = 0; // Variable to store entry price
 
-        case MARUBOZU_BULLISH:
-            return IsBullishMarubozu(current);
+    //--- Determine if previous HighLow candle is bullish or bearish based on Open and High prices
+    bool isHighLowBullish = (highBuffer[1] > openHighLowBuffer[1]); // Bullish candle if High > Open
 
-        case MARUBOZU_BEARISH:
-            return IsBearishMarubozu(current);
+    //--- Determine entry price for Buy Stop and Sell Stop orders based on candle type
+    if (orderType == ORDER_TYPE_BUY)
+    {
+        entryPrice = isHighLowBullish ? highBuffer[1] : openHighLowBuffer[1]; // Buy Stop at High if bullish, at Open if bearish
+    }
+    else
+    { // ORDER_TYPE_SELL
+        entryPrice = isHighLowBullish ? openHighLowBuffer[1] : lowBuffer[1];  // Sell Stop at Open if bullish, at Low if bearish
+    }
 
+
+    double stopLoss = CalculateStopLoss(orderType, entryPrice, highLevel, lowLevel); // Calculate Stop Loss level
+    double takeProfit = CalculateTakeProfit(orderType, entryPrice, stopLoss, highLevel, lowLevel); // Calculate Take Profit level
+
+    Print("PlacePendingOrder: Entry Price:", entryPrice, ", Stop Loss:", stopLoss, ", Take Profit:", takeProfit);
+
+    //--- Set trade parameters for pending order placement
+    trade.SetExpertMagicNumber(InpMagicNumber); // Set magic number to identify orders placed by this EA
+    trade.SetDeviationInPoints(10);         // Set slippage/deviation for order execution
+
+    //--- Execute the trade by placing a Pending Order (Buy Stop or Sell Stop)
+    bool result = false;
+    if(orderType == ORDER_TYPE_BUY)
+    {
+        result = trade.BuyStop(InpLots, entryPrice, Symbol(), stopLoss, takeProfit, ORDER_TIME_GTC, 0, InpTradeComment); // Place Buy Stop order // Corrected function parameters order
+        Print("PlacePendingOrder: trade.BuyStop() called, result:", result);
+    }
+    else
+    {
+        result = trade.SellStop(InpLots, entryPrice, Symbol(), stopLoss, takeProfit, ORDER_TIME_GTC, 0, InpTradeComment); // Place Sell Stop order // Corrected function parameters order
+        Print("PlacePendingOrder: trade.SellStop() called, result:", result);
+    }
+
+    //--- Check the result of pending order placement
+    if(result)
+    {
+        if(trade.ResultRetcode() == TRADE_RETCODE_DONE)
+        {
+            Print("PlacePendingOrder: Pending order placed successfully. Ticket: ", trade.ResultOrder()); // Print order ticket if placed successfully
+        }
+        else
+        {
+            Print("PlacePendingOrder: Pending order placement failed. Error: ", trade.ResultRetcode()); // Print error code if placement failed
+            HandleTradingError(trade.ResultRetcode()); // Call error handling function
+        }
+    }
+    else
+    {
+        Print("PlacePendingOrder: trade.BuyStop()/trade.SellStop() returned FALSE (failed)"); // Print message if trade function returned false
+    }
+}
+
+
+//+------------------------------------------------------------------+
+//| Handle trailing stop and break even logic                        |
+//+------------------------------------------------------------------+
+void HandleTrailingStop()
+{
+    //--- Iterate through all open positions
+    for (int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        long positionTicket = PositionGetTicket(i); // Get position ticket
+        if (PositionSelectByTicket(positionTicket)) // Select position by ticket for further operations
+        {
+            //--- Check if position is for current symbol and magic number (to manage only EA's positions)
+            if (PositionGetSymbol(positionTicket) == Symbol() && PositionGetInteger(POSITION_MAGIC) == InpMagicNumber) // Corrected PositionSymbol and PositionMagic usage
+            {
+                ENUM_ORDER_TYPE orderType = PositionGetInteger(POSITION_TYPE); // Get order type (Buy or Sell)
+                double currentPrice = (orderType == ORDER_TYPE_BUY) ? symbolInfo.Bid() : symbolInfo.Ask(); // Get current price based on order type
+                double stopLossPrice = PositionGetDouble(POSITION_SL);    // Get current Stop Loss price
+                double takeProfitPrice = PositionGetDouble(POSITION_TP);  // Get current Take Profit price
+                double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);   // Get position open price
+                double profitPips = (orderType == ORDER_TYPE_BUY) ? (currentPrice - entryPrice) / Point() : (entryPrice - currentPrice) / Point(); // Calculate profit in pips
+
+
+                //--- Break Even Logic ---
+                if (InpUseBreakEven) // Check if Break Even is enabled in input parameters
+                {
+                    if (profitPips >= InpBreakEvenPips && stopLossPrice < entryPrice) // Check if profit is >= BreakEvenPips and SL is not yet at break even
+                    {
+                        double breakEvenLevel = entryPrice + (InpBreakEvenPipsToLock * Point() * (orderType == ORDER_TYPE_BUY ? 1 : -1)); // Calculate break even level with lock-in pips
+                        double newStopLossPrice = NormalizeDouble(breakEvenLevel, Digits()); // Normalize price to symbol digits
+
+                        Print("HandleTrailingStop: " + EnumToString(orderType) + " - Break Even triggered. Modifying Stop Loss to ", newStopLossPrice);
+                        trade.PositionModify(Symbol(), newStopLossPrice, takeProfitPrice); // Modify Stop Loss to break even level
+                    }
+                }
+
+
+                //--- Trailing Stop Logic (if Break Even is not triggered or not used, then apply Trailing Stop)
+                if (InpUseTrailingStop) // Check if Trailing Stop is enabled in input parameters
+                {
+                    if (orderType == ORDER_TYPE_BUY)
+                    { // For Buy positions
+                        double newStopLossPrice = NormalizeDouble(currentPrice - InpTrailingStopPips * Point(), Digits()); // Calculate new Trailing Stop Loss level
+                        if (InpTrailingStopPips > 0 && currentPrice - entryPrice > InpTrailingStopPips * Point() && newStopLossPrice > stopLossPrice) // Check Trailing Stop conditions
+                        {
+                            if (InpTrailingStepPips <= 0 || newStopLossPrice >= stopLossPrice + InpTrailingStepPips * Point()) // Apply Trailing Step if defined
+                            {
+                                Print("HandleTrailingStop: BUY - Modifying Trailing Stop Loss from ", stopLossPrice, " to ", newStopLossPrice);
+                                trade.PositionModify(Symbol(), newStopLossPrice, takeProfitPrice); // Modify Stop Loss to new trailing level
+                            }
+                        }
+                    }
+                    else if (orderType == ORDER_TYPE_SELL)
+                    { // For Sell positions
+                        double newStopLossPrice = NormalizeDouble(currentPrice + InpTrailingStopPips * Point(), Digits()); // Calculate new Trailing Stop Loss level
+                        if (InpTrailingStopPips > 0 && entryPrice - currentPrice > InpTrailingStopPips * Point() && newStopLossPrice < stopLossPrice) // Check Trailing Stop conditions
+                        {
+                            if (InpTrailingStepPips <= 0 || newStopLossPrice <= stopLossPrice - InpTrailingStepPips * Point()) // Apply Trailing Step if defined
+                            {
+                                Print("HandleTrailingStop: SELL - Modifying Trailing Stop Loss from ", stopLossPrice, " to ", newStopLossPrice);
+                                trade.PositionModify(Symbol(), newStopLossPrice, takeProfitPrice); // Modify Stop Loss to new trailing level
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+//+------------------------------------------------------------------+
+//| Handle trading errors                                           |
+//+------------------------------------------------------------------+
+void HandleTradingError(int errorCode)
+{
+    Print("HandleTradingError: Trading Error Code: ", errorCode, " - ", ErrorDescription(errorCode));
+    //--- Implement error handling logic here if needed (e.g., logging, notification, etc.) ---
+    switch(errorCode)
+    {
+        case TRADE_RETCODE_REJECT:
+        case TRADE_RETCODE_CANCEL:
+            Print("HandleTradingError: Order rejected or cancelled by broker.");
+            //--- Add specific handling for order rejection/cancellation if needed ---
+            break;
+        case TRADE_RETCODE_NO_MONEY:
+            Print("HandleTradingError: Insufficient funds to place order.");
+            //--- Add specific handling for insufficient funds if needed ---
+            break;
+        //--- Add cases for other common trading errors if needed ---
         default:
-            return false;
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Check if candle is a Marubozu                                     |
-//+------------------------------------------------------------------+
-bool IsBullishMarubozu(const MqlRates &candle) {
-    double bodySize = candle.close - candle.open;
-    double upperWick = candle.high - candle.close;
-    double lowerWick = candle.open - candle.low;
-
-    if(bodySize <= 0) return false;
-
-    double totalSize = candle.high - candle.low;
-    double bodyRatio = bodySize / totalSize;
-
-    return (bodyRatio >= 0.9 && upperWick/bodySize <= 0.1 && lowerWick/bodySize <= 0.1);
-}
-
-//+------------------------------------------------------------------+
-//| Check if candle is a Bearish Marubozu                             |
-//+------------------------------------------------------------------+
-bool IsBearishMarubozu(const MqlRates &candle) {
-    double bodySize = candle.open - candle.close;
-    double upperWick = candle.high - candle.open;
-    double lowerWick = candle.close - candle.low;
-
-    if(bodySize <= 0) return false;
-
-    double totalSize = candle.high - candle.low;
-    double bodyRatio = bodySize / totalSize;
-
-    return (bodyRatio >= 0.9 && upperWick/bodySize <= 0.1 && lowerWick/bodySize <= 0.1);
-}
-//+------------------------------------------------------------------+
-//| Manage open positions                                             |
-//+------------------------------------------------------------------+
-void ManageOpenPositions() {
-    for(int i = PositionsTotal() - 1; i >= 0; i--) {
-        ulong ticket = PositionGetTicket(i);
-        if(ticket <= 0) continue;
-
-        if(PositionGetString(POSITION_SYMBOL) != Symbol()) continue;
-        if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
-
-        ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-        double posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-        double currentSL = PositionGetDouble(POSITION_SL);
-
-        // Check time-based exit
-        if(CheckTimeBasedExit(ticket, posType)) continue;
-
-        // Update trailing stop if enabled
-        UpdateTrailingStop(ticket, posType, posOpenPrice, currentSL);
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Check and handle time-based exit                                  |
-//+------------------------------------------------------------------+
-bool CheckTimeBasedExit(ulong ticket, ENUM_POSITION_TYPE posType) {
-    if(!InpUseTimeBasedExit) return false;
-
-    datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
-    datetime currentTime = TimeCurrent();
-
-    double hoursElapsed = (currentTime - openTime) / 3600.0;
-    double exitHours = 0;
-
-    switch(InpTimeBasedExitDuration) {
-        case HOURS_1:  exitHours = 1; break;
-        case HOURS_2:  exitHours = 2; break;
-        case HOURS_4:  exitHours = 4; break;
-        case HOURS_8:  exitHours = 8; break;
-        case HOURS_12: exitHours = 12; break;
-        case HOURS_24: exitHours = 24; break;
-        case CUSTOM_HOURS: exitHours = InpCustomExitHours; break;
-    }
-
-    if(hoursElapsed >= exitHours) {
-        ClosePosition(ticket);
-        return true;
-    }
-
-    return false;
-}
-
-//+------------------------------------------------------------------+
-//| Update trailing stop for position                                 |
-//+------------------------------------------------------------------+
-void UpdateTrailingStop(ulong ticket, ENUM_POSITION_TYPE posType,
-                       double openPrice, double currentSL) {
-    if(!InpUseTrailingStop) return;
-
-    double newSL = 0;
-    double atrValue = atrBuffer[0];
-    double currentPrice = (posType == POSITION_TYPE_BUY) ?
-                          symbolInfo.Bid() : symbolInfo.Ask();
-
-    // Calculate activation level
-    double activationLevel = InpTrailingActivationPips * Point();
-    double profitPoints = (posType == POSITION_TYPE_BUY) ?
-                          currentPrice - openPrice :
-                          openPrice - currentPrice;
-
-    if(profitPoints < activationLevel) return;
-
-    // Calculate new stop loss
-    if(posType == POSITION_TYPE_BUY) {
-        newSL = currentPrice - (atrValue * InpAtrTrailingMultiplier);
-        if(newSL <= currentSL) return;
-    } else {
-        newSL = currentPrice + (atrValue * InpAtrTrailingMultiplier);
-        if(newSL >= currentSL && currentSL != 0) return;
-    }
-
-    // Modify stop loss
-    trade.PositionModify(ticket, newSL, PositionGetDouble(POSITION_TP));
-}
-
-//+------------------------------------------------------------------+
-//| Close position by ticket                                          |
-//+------------------------------------------------------------------+
-bool ClosePosition(ulong ticket) {
-    if(!PositionSelectByTicket(ticket)) return false;
-
-    return trade.PositionClose(ticket);
-}
-
-//+------------------------------------------------------------------+
-//| Check if volume meets filter criteria                             |
-//+------------------------------------------------------------------+
-bool IsVolumeValid(double currentVolume) {
-    if(!InpUseVolumeFilter) return true;
-
-    double volumeMA = CalculateVolumeMA(InpVolumeAvgPeriod);
-    return (currentVolume > volumeMA);
-}
-
-//+------------------------------------------------------------------+
-//| Calculate Volume Moving Average                                    |
-//+------------------------------------------------------------------+
-double CalculateVolumeMA(int period) {
-    // Create an appropriate array for tick volume
-    long volumeArray[];
-    ArraySetAsSeries(volumeArray, true);
-
-    int copied = CopyTickVolume(Symbol(), Period(), 0, period, volumeArray);
-    if(copied != period) return 0;
-
-    double sum = 0.0;
-    for(int i = 0; i < period; i++) {
-        // Explicit cast to double to avoid precision loss warning
-        sum += (double)volumeArray[i];
-    }
-
-    return sum / period;
-}
-
-//+------------------------------------------------------------------+
-//| Custom error handling                                             |
-//+------------------------------------------------------------------+
-void HandleTradingError(int errorCode) {
-    switch(errorCode) {
-        case TRADE_RETCODE_INVALID_STOPS:
-            Print("Error: Invalid stop loss or take profit levels");
-            break;
-        case TRADE_RETCODE_INVALID_VOLUME:
-            Print("Error: Invalid volume");
-            break;
-        case TRADE_RETCODE_INVALID_PRICE:
-            Print("Error: Invalid price");
-            break;
-        case TRADE_RETCODE_TRADE_DISABLED:
-            Print("Error: Trading is disabled");
-            break;
-        default:
-            Print("Error code: ", errorCode);
+            Print("HandleTradingError: Unhandled trading error code.");
+            //--- Default error handling ---
             break;
     }
 }
 
 //+------------------------------------------------------------------+
-//| Draw debug information on chart                                   |
+//| Get Deinitialization Reason String                                |
 //+------------------------------------------------------------------+
-void ShowDebugInfo() {
-    string info = "GeminiBreakout EA Status\n";
-    info += "-------------------\n";
-    info += "Balance: " + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2) + "\n";
-    info += "Equity: " + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2) + "\n";
-    info += "Spread: " + IntegerToString(SymbolInfoInteger(Symbol(), SYMBOL_SPREAD)) + "\n";
-    info += "ATR: " + DoubleToString(atrBuffer[0], 5) + "\n";
-    info += "Donchian Upper: " + DoubleToString(donchianUpperBuffer[0], 5) + "\n";
-    info += "Donchian Lower: " + DoubleToString(donchianLowerBuffer[0], 5) + "\n";
-
-    Comment(info);
+string GetDeinitReasonString(const int reason)
+{
+    switch(reason)
+    {
+        case REASON_PROGRAM:        return("Account re-initialization"); // Corrected to "Account re-initialization" as it's more descriptive for PROGRAM reason in MQL5
+        case REASON_REMOVE:         return("Chart symbol or period changed"); // Corrected to "Chart symbol or period changed" as it's more descriptive for REMOVE reason in MQL5
+        case REASON_RECOMPILE:      return("Chart closed"); // Corrected to "Chart closed" as it's more descriptive for RECOMPILE reason in MQL5
+        case REASON_CHARTCHANGE:    return("Program compilation"); // Corrected to "Program compilation" as it's more descriptive for CHARTCHANGE reason in MQL5
+        case REASON_PARAMETERS:     return("Input parameters changed");
+        case REASON_ACCOUNT:        return("Template changed"); // Corrected to "Template changed" as it's more descriptive for ACCOUNT reason in MQL5
+        case REASON_TEMPLATE:       return("Expert Advisor, script or indicator changed"); // Corrected to "Expert Advisor, script or indicator changed" as it's more descriptive for TEMPLATE reason in MQL5
+        case REASON_INITFAILED:     return("Expert Advisor, script or indicator removed"); // Corrected to "Expert Advisor, script or indicator removed" as it's more descriptive for INITFAILED reason in MQL5
+        default:                    return("Unknown reason");
+    }
 }
 
+
 //+------------------------------------------------------------------+
-//| Timer event handler                                               |
+//| Is New Bar on Timeframe                                           |
 //+------------------------------------------------------------------+
-void OnTimer() {
-    // No debug info in timer event anymore
+bool IsNewBar(ENUM_TIMEFRAMES timeframe)
+{
+    static datetime lastBarTime = 0; // Static variable to store the time of the last processed bar
+    datetime currentBarTime = iTime(Symbol(), timeframe, 0); // Get current bar time for the given timeframe
+
+    //--- Check if current bar time is greater than the last bar time
+    if(currentBarTime > lastBarTime)
+    {
+        lastBarTime = currentBarTime; // Update last bar time to current bar time
+        return(true);                  // Return true if new bar is detected
+    }
+    return(false);                     // Return false if it's not a new bar
 }
+//+------------------------------------------------------------------+
