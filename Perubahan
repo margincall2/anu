@@ -1,37 +1,22 @@
-#property copyright "Copyright 2025, Sakha"
-#property link      "https://shopee.co.id/algotrade"
+#property copyright "Copyright 2023, Your Name"
+#property link      "https://www.example.com"
 #property version   "1.00"
-#property description "Sakha Property"
-#property indicator_chart_window  // Allow drawing on chart
+#property description "Flexible High-Low Pending Orders EA with Advanced Features"
 
 // Input parameters
 input ulong   MagicNumber = 123456;      // Magic Number
-input double  LotSize = 0.1;             // Lot Size (Initial, Risk per trade will override)
-input double  RiskPercent = 1.0;         // Risk per trade (%)
+input double  LotSize = 0.1;             // Lot Size
 input int     StopLoss = 50;             // Stop Loss (points)
 input int     TakeProfit = 100;          // Take Profit (points)
-input int     TrailingStop = 20;         // Trailing Stop (points)
-input int     BreakEven = 10;            // Break Even (points)
+input int     TrailingStop = 30;         // Trailing Stop (points)
+input int     BreakEven = 20;            // Break Even (points)
 input int     MaxSpread = 10;            // Max Allowed Spread (points)
 input ENUM_TIMEFRAMES Timeframe = PERIOD_CURRENT;  // High/Low Timeframe
 input string  OrderComment = "HLStrategy"; // Order Comment
-input bool    UseHiddenSL = true;        // Use Hidden Stop Loss
-input color   SLColor = clrRed;          // Stop Loss Line Color
-input color   TPColor = clrGreen;        // Take Profit Line Color
-input color   TSColor = clrBlue;         // Trailing Stop Line Color
 
 // Global variables
 datetime lastBarTime;
 double currentHigh, currentLow;
-string indicatorPrefix;
-bool isTrailingActive = false;
-double virtualStopLoss = 0;
-double virtualTakeProfit = 0;
-
-// Line names
-string slLineName;
-string tpLineName;
-string tsLineName;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -39,107 +24,123 @@ string tsLineName;
 int OnInit()
 {
    lastBarTime = 0;
-   
-   // Initialize unique names for the lines
-   indicatorPrefix = "HL_" + IntegerToString(MagicNumber);
-   slLineName = indicatorPrefix + "_SL";
-   tpLineName = indicatorPrefix + "_TP";
-   tsLineName = indicatorPrefix + "_TS";
-   
-   // Delete any existing lines
-   ObjectDelete(0, slLineName);
-   ObjectDelete(0, tpLineName);
-   ObjectDelete(0, tsLineName);
-   
    return(INIT_SUCCEEDED);
 }
 
 //+------------------------------------------------------------------+
-//| Expert deinitialization function                                 |
+//| Expert tick function                                             |
 //+------------------------------------------------------------------+
-void OnDeinit(const int reason)
+void OnTick()
 {
-   // Clean up all objects created by this EA
-   ObjectDelete(0, slLineName);
-   ObjectDelete(0, tpLineName);
-   ObjectDelete(0, tsLineName);
-}
-
-//+------------------------------------------------------------------+
-//| Create horizontal line                                           |
-//+------------------------------------------------------------------+
-void CreateHLine(string name, double price, color clr, string text)
-{
-   if(ObjectFind(0, name) >= 0)
-      ObjectDelete(0, name);
-      
-   ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_DASH);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
-   ObjectSetString(0, name, OBJPROP_TOOLTIP, text);
-}
-
-//+------------------------------------------------------------------+
-//| Update indicators                                                |
-//+------------------------------------------------------------------+
-void UpdateIndicators(double slLevel, double tpLevel, double tsLevel = 0)
-{
-   if(slLevel > 0) CreateHLine(slLineName, slLevel, SLColor, "Stop Loss");
-   if(tpLevel > 0) CreateHLine(tpLineName, tpLevel, TPColor, "Take Profit");
-   if(tsLevel > 0) CreateHLine(tsLineName, tsLevel, TSColor, "Trailing Stop");
-}
-
-//+------------------------------------------------------------------+
-//| Check for virtual stop loss hit                                  |
-//+------------------------------------------------------------------+
-bool IsVirtualStopLossHit()
-{
-   if(!UseHiddenSL || virtualStopLoss == 0) return false;
+   if(!CheckSpread()) return;
    
-   double currentBid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   double currentAsk = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-   
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   if(IsNewBar())
    {
-      if(PositionGetTicket(i) <= 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-      
-      ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      
-      if((type == POSITION_TYPE_BUY && currentBid <= virtualStopLoss) ||
-         (type == POSITION_TYPE_SELL && currentAsk >= virtualStopLoss))
-      {
-         return true;
-      }
+      UpdateLevels();
+      ManagePendingOrders();
+   }
+   
+   ManageOpenPositions();
+}
+
+//+------------------------------------------------------------------+
+//| Check spread conditions                                          |
+//+------------------------------------------------------------------+
+bool CheckSpread()
+{
+   int spread = (int)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   if(spread > MaxSpread)
+   {
+      CancelAllPending();
+      return false;
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Check for new bar formation                                      |
+//+------------------------------------------------------------------+
+bool IsNewBar()
+{
+   datetime currentBarTime = iTime(Symbol(), Timeframe, 0);
+   if(currentBarTime != lastBarTime)
+   {
+      lastBarTime = currentBarTime;
+      return true;
    }
    return false;
 }
 
 //+------------------------------------------------------------------+
-//| Check for virtual take profit hit                                |
+//| Update high/low levels                                           |
 //+------------------------------------------------------------------+
-bool IsVirtualTakeProfitHit()
+void UpdateLevels()
 {
-   if(virtualTakeProfit == 0) return false;
-   
-   double currentBid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   double currentAsk = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-   
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   currentHigh = iHigh(Symbol(), Timeframe, 1);
+   currentLow = iLow(Symbol(), Timeframe, 1);
+}
+
+//+------------------------------------------------------------------+
+//| Manage pending orders                                            |
+//+------------------------------------------------------------------+
+void ManagePendingOrders()
+{
+   bool buyStopFound = false, sellStopFound = false;
+   ulong buyTicket = 0, sellTicket = 0;
+
+   for(int i = OrdersTotal()-1; i >= 0; i--)
    {
-      if(PositionGetTicket(i) <= 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      ulong ticket = OrderGetTicket(i);
+      if(ticket <= 0) continue;
       
-      ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      
-      if((type == POSITION_TYPE_BUY && currentBid >= virtualTakeProfit) ||
-         (type == POSITION_TYPE_SELL && currentAsk <= virtualTakeProfit))
+      if(OrderGetInteger(ORDER_MAGIC) == MagicNumber && 
+         OrderGetString(ORDER_COMMENT) == OrderComment)
       {
-         return true;
+         ENUM_ORDER_TYPE type = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+         if(type == ORDER_TYPE_BUY_STOP)
+         {
+            buyStopFound = true;
+            buyTicket = ticket;
+            CheckModifyOrder(buyTicket, currentHigh, ORDER_TYPE_BUY_STOP);
+         }
+         else if(type == ORDER_TYPE_SELL_STOP)
+         {
+            sellStopFound = true;
+            sellTicket = ticket;
+            CheckModifyOrder(sellTicket, currentLow, ORDER_TYPE_SELL_STOP);
+         }
       }
    }
-   return false;
+
+   if(!buyStopFound) PlacePendingOrder(ORDER_TYPE_BUY_STOP, currentHigh);
+   if(!sellStopFound) PlacePendingOrder(ORDER_TYPE_SELL_STOP, currentLow);
+}
+
+//+------------------------------------------------------------------+
+//| Check and modify existing order                                  |
+//+------------------------------------------------------------------+
+void CheckModifyOrder(ulong ticket, double newPrice, ENUM_ORDER_TYPE type)
+{
+   double currentPrice = OrderGetDouble(ORDER_PRICE_OPEN);
+   if(currentPrice == newPrice) return;
+
+   double sl = (type == ORDER_TYPE_BUY_STOP) ? 
+               newPrice - StopLoss * _Point : 
+               newPrice + StopLoss * _Point;
+   double tp = (type == ORDER_TYPE_BUY_STOP) ? 
+               newPrice + TakeProfit * _Point : 
+               newPrice - TakeProfit * _Point;
+
+   MqlTradeRequest request = {0};
+   MqlTradeResult result = {0};
+   
+   request.action = TRADE_ACTION_MODIFY;
+   request.order = ticket;
+   request.price = newPrice;
+   request.sl = sl;
+   request.tp = tp;
+   
+   OrderSend(request, result);
 }
 
 //+------------------------------------------------------------------+
@@ -147,154 +148,113 @@ bool IsVirtualTakeProfitHit()
 //+------------------------------------------------------------------+
 void PlacePendingOrder(ENUM_ORDER_TYPE type, double price)
 {
-   double sl = (type == ORDER_TYPE_BUY_STOP) ?
-               price - StopLoss * _Point :
+   double sl = (type == ORDER_TYPE_BUY_STOP) ? 
+               price - StopLoss * _Point : 
                price + StopLoss * _Point;
-   double tp = (type == ORDER_TYPE_BUY_STOP) ?
-               price + TakeProfit * _Point :
+   double tp = (type == ORDER_TYPE_BUY_STOP) ? 
+               price + TakeProfit * _Point : 
                price - TakeProfit * _Point;
 
-   MqlTradeRequest request;
-   MqlTradeResult result;
-   ZeroMemory(request);
-   ZeroMemory(result);
-
+   MqlTradeRequest request = {0};
+   MqlTradeResult result = {0};
+   
    request.action = TRADE_ACTION_PENDING;
    request.symbol = Symbol();
-   request.volume = CalculateLotSize();
+   request.volume = LotSize;
    request.type = type;
    request.price = price;
-   
-   // Set actual SL/TP only if not using hidden SL
-   if(!UseHiddenSL)
-   {
-      request.sl = sl;
-      request.tp = tp;
-   }
-   else
-   {
-      virtualStopLoss = sl;
-      virtualTakeProfit = tp;
-      UpdateIndicators(sl, tp);
-   }
-   
+   request.sl = sl;
+   request.tp = tp;
    request.deviation = 5;
    request.magic = MagicNumber;
    request.comment = OrderComment;
+   
+   OrderSend(request, result);
+}
 
-   if(!OrderSend(request, result))
+//+------------------------------------------------------------------+
+//| Cancel all pending orders                                        |
+//+------------------------------------------------------------------+
+void CancelAllPending()
+{
+   for(int i = OrdersTotal()-1; i >= 0; i--)
    {
-      Print("OrderSend failed. Error code: ", result.retcode);
+      ulong ticket = OrderGetTicket(i);
+      if(ticket <= 0) continue;
+      
+      if(OrderGetInteger(ORDER_MAGIC) == MagicNumber && 
+         OrderGetString(ORDER_COMMENT) == OrderComment)
+      {
+         MqlTradeRequest request = {0};
+         MqlTradeResult result = {0};
+         request.action = TRADE_ACTION_REMOVE;
+         request.order = ticket;
+         OrderSend(request, result);
+      }
    }
 }
 
 //+------------------------------------------------------------------+
-//| Manage open positions                                            |
+//| Manage open positions with trailing and breakeven                |
 //+------------------------------------------------------------------+
 void ManageOpenPositions()
 {
-   UpdateLevels(); // Update high/low levels for next orders
-   
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   for(int i = PositionsTotal()-1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket <= 0) continue;
-
-      if(PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
+      
+      if(PositionGetInteger(POSITION_MAGIC) == MagicNumber && 
          PositionGetString(POSITION_COMMENT) == OrderComment)
       {
-         // Check virtual SL/TP first
-         if(IsVirtualStopLossHit() || IsVirtualTakeProfitHit())
-         {
-            ClosePosition(ticket);
-            continue;
-         }
-         
-         ManagePosition(ticket);
+         CheckTrailingStop(ticket);
+         CheckBreakEven(ticket);
       }
    }
 }
 
 //+------------------------------------------------------------------+
-//| Close position                                                   |
+//| Implement trailing stop functionality                           |
 //+------------------------------------------------------------------+
-void ClosePosition(ulong ticket)
-{
-   MqlTradeRequest request;
-   MqlTradeResult result;
-   ZeroMemory(request);
-   ZeroMemory(result);
-   
-   request.action = TRADE_ACTION_DEAL;
-   request.position = ticket;
-   request.symbol = Symbol();
-   request.volume = PositionGetDouble(POSITION_VOLUME);
-   request.type = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
-   request.price = SymbolInfoDouble(Symbol(), request.type == ORDER_TYPE_SELL ? SYMBOL_BID : SYMBOL_ASK);
-   
-   if(!OrderSend(request, result))
-   {
-      Print("Close position failed. Error code: ", result.retcode);
-   }
-   else
-   {
-      // Clear virtual levels and indicators
-      virtualStopLoss = 0;
-      virtualTakeProfit = 0;
-      ObjectDelete(0, slLineName);
-      ObjectDelete(0, tpLineName);
-      ObjectDelete(0, tsLineName);
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Manage single position                                           |
-//+------------------------------------------------------------------+
-void ManagePosition(ulong ticket)
+void CheckTrailingStop(ulong ticket)
 {
    ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-   double currentPrice = (type == POSITION_TYPE_BUY) ? SymbolInfoDouble(Symbol(), SYMBOL_BID) : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double currentPrice = type == POSITION_TYPE_BUY ? Bid() : Ask();
    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   double currentSl = UseHiddenSL ? virtualStopLoss : PositionGetDouble(POSITION_SL);
-   double pointsProfit = MathAbs(currentPrice - openPrice) / _Point;
-   
-   // Check if the position is at breakeven
-   bool isAtBreakeven = (type == POSITION_TYPE_BUY && currentSl >= openPrice) ||
-                       (type == POSITION_TYPE_SELL && currentSl <= openPrice);
-   
-   // If not at breakeven, check if we can move to breakeven
-   if(!isAtBreakeven && pointsProfit >= BreakEven)
+   double currentSl = PositionGetDouble(POSITION_SL);
+   double pointsProfit = MathAbs(currentPrice - openPrice)/_Point;
+
+   if(pointsProfit < TrailingStop) return;
+
+   double newSl = currentPrice - (type == POSITION_TYPE_BUY ? 
+                  TrailingStop * _Point : -TrailingStop * _Point);
+
+   if((type == POSITION_TYPE_BUY && newSl > currentSl) || 
+      (type == POSITION_TYPE_SELL && newSl < currentSl))
    {
-      double newSl = openPrice + (type == POSITION_TYPE_BUY ? 1 * _Point : -1 * _Point);
-      if(UseHiddenSL)
-      {
-         virtualStopLoss = newSl;
-         UpdateIndicators(newSl, virtualTakeProfit);
-      }
-      else
-      {
-         ModifyPositionSl(ticket, newSl);
-      }
+      ModifyPositionSl(ticket, newSl);
    }
-   // If already at breakeven, manage trailing stop
-   else if(isAtBreakeven && pointsProfit >= TrailingStop)
+}
+
+//+------------------------------------------------------------------+
+//| Implement break even functionality                              |
+//+------------------------------------------------------------------+
+void CheckBreakEven(ulong ticket)
+{
+   ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   double currentPrice = type == POSITION_TYPE_BUY ? Bid() : Ask();
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   double currentSl = PositionGetDouble(POSITION_SL);
+   double pointsProfit = MathAbs(currentPrice - openPrice)/_Point;
+
+   if(pointsProfit < BreakEven) return;
+
+   double newSl = openPrice + (type == POSITION_TYPE_BUY ? 1 * _Point : -1 * _Point);
+   
+   if((type == POSITION_TYPE_BUY && newSl > currentSl) || 
+      (type == POSITION_TYPE_SELL && newSl < currentSl))
    {
-      double newSl = currentPrice - (type == POSITION_TYPE_BUY ?
-                     TrailingStop * _Point : -TrailingStop * _Point);
-                     
-      if((type == POSITION_TYPE_BUY && newSl > currentSl) ||
-         (type == POSITION_TYPE_SELL && newSl < currentSl))
-      {
-         if(UseHiddenSL)
-         {
-            virtualStopLoss = newSl;
-            UpdateIndicators(newSl, virtualTakeProfit, newSl);
-         }
-         else
-         {
-            ModifyPositionSl(ticket, newSl);
-         }
-      }
+      ModifyPositionSl(ticket, newSl);
    }
 }
 
@@ -303,19 +263,15 @@ void ManagePosition(ulong ticket)
 //+------------------------------------------------------------------+
 void ModifyPositionSl(ulong ticket, double newSl)
 {
-   MqlTradeRequest request;
-   MqlTradeResult result;
-   ZeroMemory(request);
-   ZeroMemory(result);
-
+   MqlTradeRequest request = {0};
+   MqlTradeResult result = {0};
+   
    request.action = TRADE_ACTION_SLTP;
    request.position = ticket;
    request.symbol = Symbol();
    request.sl = newSl;
    request.tp = PositionGetDouble(POSITION_TP);
-
-   if(!OrderSend(request, result))
-   {
-      Print("ModifyPositionSL failed. Error code: ", result.retcode);
-   }
+   
+   OrderSend(request, result);
 }
+//+------------------------------------------------------------------+
