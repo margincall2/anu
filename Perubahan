@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
-//|                                               SakhaBreak_V3.mq5    |
-//|                            Copyright 2025, Margin Call 2 (Updated) |
-//|                                    https://github.com/margincall2  |
+//|                                               SakhaBreak_V3.mq5  |
+//|                            Copyright 2025, Margin Call 2 (Updated)|
+//|                                    https://github.com/margincall2|
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, Margin Call 2"
 #property link      "https://github.com/margincall2"
@@ -66,7 +66,7 @@ string           gDebugLabels[];
 int              gCurrentFontSize;
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                     |
+//| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
@@ -89,7 +89,7 @@ int OnInit()
 }
 
 //+------------------------------------------------------------------+
-//| Expert deinitialization function                                   |
+//| Expert deinitialization function                                 |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
@@ -99,7 +99,7 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                              |
+//| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick()
 {
@@ -124,7 +124,7 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-//| Chart event handler                                               |
+//| Chart event handler                                              |
 //+------------------------------------------------------------------+
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
@@ -340,7 +340,7 @@ void CheckBreakEven(ulong ticket)
 }
 
 //+------------------------------------------------------------------+
-//| Modify position                                                   |
+//| Modify position                                                  |
 //+------------------------------------------------------------------+
 bool ModifyPosition(ulong ticket, double sl, double tp)
 {
@@ -414,7 +414,8 @@ bool ClosePosition(ulong ticket)
    MqlTradeRequest request = {};
    MqlTradeResult result = {};
    
-   request.action = TRADE_ACTION_DEAL;request.position = ticket;
+   request.action = TRADE_ACTION_DEAL;
+   request.position = ticket;
    request.symbol = _Symbol;
    request.volume = PositionGetDouble(POSITION_VOLUME);
    request.type = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
@@ -440,7 +441,7 @@ bool ClosePosition(ulong ticket)
 }
 
 //+------------------------------------------------------------------+
-//| Create debug display                                              |
+//| Create debug display                                             |
 //+------------------------------------------------------------------+
 void CreateDebugDisplay()
 {
@@ -475,7 +476,7 @@ void CreateDebugDisplay()
 }
 
 //+------------------------------------------------------------------+
-//| Create font size controls                                         |
+//| Create font size controls                                        |
 //+------------------------------------------------------------------+
 void CreateFontSizeControls()
 {
@@ -486,7 +487,7 @@ void CreateFontSizeControls()
 }
 
 //+------------------------------------------------------------------+
-//| Update debug information                                          |
+//| Update debug information                                         |
 //+------------------------------------------------------------------+
 void UpdateDebugInfo()
 {
@@ -502,7 +503,7 @@ void UpdateDebugInfo()
    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    
-   gStats.currentSpread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   gStats.currentSpread = (double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
    gStats.pingServer = (int)TerminalInfoInteger(TERMINAL_PING_LAST);
    gStats.calculatedLot = CalculateLotSize();
    gStats.riskAmount = accountBalance * InpRiskPercent / 100.0;
