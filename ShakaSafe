@@ -1,0 +1,215 @@
+//+------------------------------------------------------------------+
+//|                                          SakhaBreak_V3_Safe.mq5   |
+//|                     Copyright 2025, margincall2 (Safe Version)    |
+//|                                    https://github.com/margincall2  |
+//+------------------------------------------------------------------+
+#property copyright   "Copyright 2025, margincall2"
+#property link       "https://github.com/margincall2"
+#property version    "3.0"
+#property strict
+#property description "SakhaBreak V3 - Protected Version with Safety Features"
+
+// Core Parameters
+input double LotSize = 0.01;          // Lot Size
+input int    StopLoss = 50;           // Stop Loss (points)
+input int    TakeProfit = 100;        // Take Profit (points)
+input int    MagicNumber = 2326;      // Magic Number (berbeda dari Original)
+
+// Safety Parameters
+input double MaxDailyLoss = 100;      // Maximum Daily Loss (USD)
+input double MaxDailyProfit = 200;    // Maximum Daily Profit (USD)
+input bool   UseVirtualSL = true;     // Use Virtual Stop Loss
+input bool   UseAntiHunter = true;    // Enable Anti-Hunter Protection
+
+// Global Variables
+int g_ticket = 0;
+bool g_isTrading = false;
+datetime g_lastBar = 0;
+double g_dailyProfit = 0;
+datetime g_lastDayChecked = 0;
+
+//+------------------------------------------------------------------+
+//| Daily Stats Reset & Safety Functions                              |
+//+------------------------------------------------------------------+
+void ResetDailyStats()
+{
+    datetime today = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
+    if(g_lastDayChecked < today)
+    {
+        g_dailyProfit = 0;
+        g_lastDayChecked = today;
+        Print("🌅 Daily stats reset - New trading day!");
+    }
+}
+
+bool IsSafeToContinue()
+{
+    if(g_dailyProfit <= -MaxDailyLoss)
+    {
+        Print("⛔ Daily loss limit reached: $", g_dailyProfit);
+        return false;
+    }
+    if(g_dailyProfit >= MaxDailyProfit)
+    {
+        Print("🎯 Daily profit target reached: $", g_dailyProfit);
+        return false;
+    }
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                     |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    Print("🛡️ SakhaBreak V3 Safe Version started");
+    g_lastDayChecked = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
+    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                              |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+    ResetDailyStats();
+    
+    if(!IsSafeToContinue())
+    {
+        if(g_isTrading) CloseAllPositions();
+        return;
+    }
+    
+    datetime currentBar = iTime(Symbol(), PERIOD_CURRENT, 0);
+    bool isNewBar = (currentBar != g_lastBar);
+    
+    if(isNewBar)
+    {
+        g_lastBar = currentBar;
+        CheckTradingSignals();
+    }
+    
+    if(g_isTrading)
+    {
+        ManagePositions();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Safe Trading Logic with Protection                                |
+//+------------------------------------------------------------------+
+void CheckTradingSignals()
+{
+    double ma20 = iMA(Symbol(), PERIOD_CURRENT, 20, 0, MODE_SMA, PRICE_CLOSE, 0);
+    double ma50 = iMA(Symbol(), PERIOD_CURRENT, 50, 0, MODE_SMA, PRICE_CLOSE, 0);
+    double volatility = iATR(Symbol(), PERIOD_CURRENT, 14, 0);
+    
+    // Anti-Hunter Protection
+    if(UseAntiHunter && volatility > 2 * iATR(Symbol(), PERIOD_CURRENT, 14, 1))
+    {
+        Print("🚨 High volatility detected - Trading paused");
+        return;
+    }
+    
+    if(!g_isTrading)
+    {
+        double adjustedSL = UseVirtualSL ? 0 : StopLoss;
+        
+        // Enhanced Buy condition
+        if(ma20 > ma50 && IsMarketCalm())
+        {
+            g_ticket = OrderSend(Symbol(), OP_BUY, LotSize, Ask, 3, 
+                               Ask - adjustedSL*Point, Ask + TakeProfit*Point,
+                               "SakhaBreak V3 Safe", MagicNumber, 0, clrGreen);
+            if(g_ticket > 0) 
+            {
+                g_isTrading = true;
+                Print("🛡️ Protected Buy Order placed");
+            }
+        }
+        
+        // Enhanced Sell condition
+        if(ma20 < ma50 && IsMarketCalm())
+        {
+            g_ticket = OrderSend(Symbol(), OP_SELL, LotSize, Bid, 3,
+                               Bid + adjustedSL*Point, Bid - TakeProfit*Point,
+                               "SakhaBreak V3 Safe", MagicNumber, 0, clrRed);
+            if(g_ticket > 0)
+            {
+                g_isTrading = true;
+                Print("🛡️ Protected Sell Order placed");
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Enhanced Position Management with Virtual SL                       |
+//+------------------------------------------------------------------+
+void ManagePositions()
+{
+    for(int i=0; i<OrdersTotal(); i++)
+    {
+        if(OrderSelect(i, SELECT_BY_POS) && OrderMagicNumber() == MagicNumber)
+        {
+            // Virtual Stop Loss Check
+            if(UseVirtualSL)
+            {
+                double virtualSL = OrderType() == OP_BUY ? 
+                    OrderOpenPrice() - StopLoss*Point :
+                    OrderOpenPrice() + StopLoss*Point;
+                
+                if((OrderType() == OP_BUY && Bid <= virtualSL) ||
+                   (OrderType() == OP_SELL && Ask >= virtualSL))
+                {
+                    OrderClose(OrderTicket(), OrderLots(), 
+                             OrderType() == OP_BUY ? Bid : Ask, 3, clrOrange);
+                    Print("🎯 Virtual Stop Loss hit");
+                    g_isTrading = false;
+                    return;
+                }
+            }
+            
+            // Update daily profit
+            g_dailyProfit = OrderProfit();
+            
+            // Break-even + trailing stop
+            if(OrderProfit() > 0)
+            {
+                double newSL = OrderOpenPrice() + (OrderType() == OP_BUY ? 10*Point : -10*Point);
+                OrderModify(OrderTicket(), OrderOpenPrice(), newSL, 
+                          OrderTakeProfit(), 0, clrBlue);
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Helper Functions                                                  |
+//+------------------------------------------------------------------+
+bool IsMarketCalm()
+{
+    double atr = iATR(Symbol(), PERIOD_CURRENT, 14, 0);
+    double avgAtr = 0;
+    
+    for(int i=1; i<=5; i++)
+    {
+        avgAtr += iATR(Symbol(), PERIOD_CURRENT, 14, i);
+    }
+    avgAtr /= 5;
+    
+    return (atr <= avgAtr * 1.5);
+}
+
+void CloseAllPositions()
+{
+    for(int i=OrdersTotal()-1; i>=0; i--)
+    {
+        if(OrderSelect(i, SELECT_BY_POS) && OrderMagicNumber() == MagicNumber)
+        {
+            OrderClose(OrderTicket(), OrderLots(), 
+                      OrderType() == OP_BUY ? Bid : Ask, 3, clrViolet);
+        }
+    }
+    g_isTrading = false;
+}
