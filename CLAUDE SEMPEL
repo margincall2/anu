@@ -1,13 +1,10 @@
 #property copyright "Copyright © 2025 Shaka"
 #property link      "www.shopee.co.id/algotrade"
 
-
-
-
 extern string EACmt = "Sakha Speed";
 extern int FilterShort = 90;
 extern int FilterLong = 120;
-extern int MagicNumber = 41188
+extern int MagicNumber = 41188;
 extern int StopLoss = 14;
 double MinLots = 0.01;
 double MaxLots = 1000.0;
@@ -36,7 +33,6 @@ int Slippage = 3;
 double StopLevel = 0.0;
 bool CommissionCalculated;
 
-
 double SpreadArray[30];
 int Tick = 0;
 double vLeverage;
@@ -44,8 +40,8 @@ bool OrderModified;
 double NewBuySL;
 double NewSellSL; 
 
-double	MarginForOneLot;
-double   AccMargin;
+double MarginForOneLot;
+double AccMargin;
 
 int init() {
    ArrayInitialize(SpreadArray, 0);
@@ -64,33 +60,25 @@ int init() {
 
    return (0);
 }
-	 	  	 			  	   	  	  	 				    	  	 					    	  	   	   	 	 	   	 	 		  		 					 			 		  	   				 		 		  	      			   			 	 	 	 					  	 			  	 
 
 int deinit() {
-
    return (0);
 }
-	 	 			  	    		   		  	 				 		   			   	  	  			  						 							 			 				  	    		    	 	 	    	 	    	 	 	 							 	  	 				 				 			  		  	 	
 
 int start() {
-
    int OrdTicket;
    double NewSL;
    double PipProfit;
    int PriceDirection;
    double EntryPrice;
 
-
    double BarHigh = iHigh(NULL, 0, 0);
    double BarLow  = iLow(NULL, 0, 0);
-   
 
    double MA_Low  = iMA(NULL, 0, MAPeriod, MAShift, MAMethod, PRICE_LOW, 0);
    double MA_High = iMA(NULL, 0, MAPeriod, MAShift, MAMethod, PRICE_HIGH, 0);
 
- 
-      
-      if (!CommissionCalculated) {
+   if (!CommissionCalculated) {
       for (int OrdTotal = OrdersHistoryTotal() - 1; OrdTotal >= 0; OrdTotal--) {
          if (OrderSelect(OrdTotal, SELECT_BY_POS, MODE_HISTORY)) {
             if (OrderProfit() != 0.0) {
@@ -105,7 +93,7 @@ int start() {
             }
          }
       }
-   }  
+   }
 
    double Spread = Ask - Bid;
    ArrayCopy(SpreadArray, SpreadArray, 0, 1, 29);
@@ -118,7 +106,7 @@ int start() {
       OrdTotal--;
    }
 
-    AvgSpread = Sum_Of_Spread / Tick;
+   AvgSpread = Sum_Of_Spread / Tick;
    RealAvgSpread = NormalizeDouble(AvgSpread + PipCommission, Digits + 1);
    double BarSize = BarHigh - BarLow;
    
@@ -126,46 +114,34 @@ int start() {
    if (BarSize > vFilterShort && Bid > MA_High) PriceDirection = 1; // Price is going up
    
    if (OrdersTotal() == 0 && RealAvgSpread <= vMaxSpread) {
- 
- 
-///// Buy Stop Condition /////////////////////////////////
-
-         if (PriceDirection == -1) {
-            EntryPrice = ND(Ask + vPending_Distance);
-            NewSL = ND(EntryPrice - StopLoss * Point);
-            OrdTicket = OrderSend(Symbol(), OP_BUYSTOP, Lot(), EntryPrice, Slippage, NewSL, 0, EACmt, MagicNumber, 0, Lime);
-            if (OrdTicket <= 0) {
-   
-               Print("BUYSTOP Send Error Code: " + GetLastError() + " Message: "  + " Lot: " + DoubleToStr(Lot(), vLotStep) + " OP: " + DoubleToStr(EntryPrice, Digits) + " SL: " +
-                  DoubleToStr(NewSL, Digits) + " Bid: " + DoubleToStr(Bid, Digits) + " Ask: " + DoubleToStr(Ask, Digits));
-            }
-         } 
-    
- 
-////// Sell Stop Condition /////////////////////////////////     
-         if (PriceDirection == 1) {
-            EntryPrice = ND(Bid - vPending_Distance);
-            NewSL = ND(EntryPrice + StopLoss * Point);
-            OrdTicket = OrderSend(Symbol(), OP_SELLSTOP, Lot(), EntryPrice, Slippage, NewSL, 0, EACmt, MagicNumber, 0, Orange);
-            if (OrdTicket <= 0) {
-   
-               Print("BUYSELL Send Error Code: " + GetLastError() + " Message: "  + " Lot: " + DoubleToStr(Lot(), vLotStep) + " OP: " + DoubleToStr(EntryPrice, Digits) + " SL: " +
-                  DoubleToStr(NewSL, Digits) + " Bid: " + DoubleToStr(Bid, Digits) + " Ask: " + DoubleToStr(Ask, Digits));
-            }
+      if (PriceDirection == -1) {
+         EntryPrice = ND(Ask + vPending_Distance);
+         NewSL = ND(EntryPrice - StopLoss * Point);
+         OrdTicket = OrderSend(Symbol(), OP_BUYSTOP, Lot(), EntryPrice, Slippage, NewSL, 0, EACmt, MagicNumber, 0, Lime);
+         if (OrdTicket <= 0) {
+            Print("BUYSTOP Send Error Code: " + GetLastError() + " Message: "  + " Lot: " + DoubleToStr(Lot(), vLotStep) + " OP: " + DoubleToStr(EntryPrice, Digits) + " SL: " +
+               DoubleToStr(NewSL, Digits) + " Bid: " + DoubleToStr(Bid, Digits) + " Ask: " + DoubleToStr(Ask, Digits));
          }
-  
+      }
+      if (PriceDirection == 1) {
+         EntryPrice = ND(Bid - vPending_Distance);
+         NewSL = ND(EntryPrice + StopLoss * Point);
+         OrdTicket = OrderSend(Symbol(), OP_SELLSTOP, Lot(), EntryPrice, Slippage, NewSL, 0, EACmt, MagicNumber, 0, Orange);
+         if (OrdTicket <= 0) {
+            Print("BUYSELL Send Error Code: " + GetLastError() + " Message: "  + " Lot: " + DoubleToStr(Lot(), vLotStep) + " OP: " + DoubleToStr(EntryPrice, Digits) + " SL: " +
+               DoubleToStr(NewSL, Digits) + " Bid: " + DoubleToStr(Bid, Digits) + " Ask: " + DoubleToStr(Ask, Digits));
+         }
+      }
    }
    
    for (OrdTotal = 0; OrdTotal < OrdersTotal(); OrdTotal++) {
       OrderMgmt();
    }
      
-   
    if(Debug) fDisplayInfo();
 
    return (0);
 }	
-
 
 void OrderMgmt() {
    double LocalBid;
@@ -176,7 +152,6 @@ void OrderMgmt() {
    double EntryPrice;
    double NewSL;
    bool ModifyOrder;
- 
 
    int SL_Status = 1;
    if (SL_Distance  <= StopLevel) SL_Status = -1;
@@ -187,15 +162,13 @@ void OrderMgmt() {
          OrdMagic = OrderMagicNumber();
          if (OrdMagic == MagicNumber) {
             if (OrderType() == OP_BUY) {
-               
                if (StopLoss  <= StopLevel || OrderModified == TRUE) {
                   if (OrderStopLoss() == 0.0)
                      if (NewBuySL == 0.0) NewBuySL = OrderOpenPrice() - StopLoss  * Point;
                   if ((OrderOpenPrice() - Ask) >= StopLoss * Point) {
                     if(!OrderClose(OrderTicket(), OrderLots(), Bid, 3*Point, clrBlue))Print("Order Close Error: " +GetLastError());
-                    } 
+                  } 
                }
-               
                if (SL_Status == -1) {
                   OrdOpenPrice = OrderOpenPrice();
                   while (!IsTradeAllowed()) Sleep(500);
@@ -232,7 +205,7 @@ void OrderMgmt() {
                      if (NewSellSL == 0.0) NewSellSL = OrderOpenPrice() + StopLoss * Point;
                   if (Bid - OrderOpenPrice() >= StopLoss * Point) {
                      if(!OrderClose(OrderTicket(), OrderLots(), Ask, 3 * Point, clrRed)) Print("Order Close Error: " +GetLastError());
-                     }
+                  }
                }
                if (SL_Status == -1) {
                   OrdOpenPrice = OrderOpenPrice();
@@ -256,7 +229,7 @@ void OrderMgmt() {
                   LocalAsk = Ask;
                   if ((OrdOpenPrice - LocalAsk > SL_Distance * Point) && ((OrderSL > LocalAsk + SL_Distance * Point) || OrderSL == 0.0)) {
                      NewSL = LocalAsk + SL_Distance * Point;
-                     }
+                  }
                   if ((NewSL < OrderSL || OrderSL == 0.0) && (NewSL < OrdOpenPrice) && (NewSL - LocalAsk > StopLevel * Point)) {
                      if (!OrderModify(OrderTicket(), OrdOpenPrice, ND(NewSL), OrderTakeProfit(), 0)) {
                         Print("Error Occured : ", GetLastError());
@@ -267,7 +240,6 @@ void OrderMgmt() {
                   }
                }
             }
-            
             if(OrderType() ==  OP_BUYSTOP){
                OrdOpenPrice = ND(OrderOpenPrice());
                EntryPrice = ND(Ask + vPending_Distance);
@@ -277,21 +249,19 @@ void OrderMgmt() {
                      if (ModifyOrder) break;
                         Print("BUYSTOP Modify Error Code: " + GetLastError() + " Message: " + " OP: " + DoubleToStr(EntryPrice, Digits) + " SL: " + DoubleToStr(NewSL, Digits) +
                            " Bid: " + DoubleToStr(Bid, Digits) + " Ask: " + DoubleToStr(Ask, Digits));
-                        break;
-                  }
-                  
-             if(OrderType() == OP_SELLSTOP){
-                OrdOpenPrice = ND(OrderOpenPrice());
-                EntryPrice = ND(Bid - vPending_Distance);
-                if (EntryPrice <= OrdOpenPrice) break;
+               break;
+            }
+            if(OrderType() == OP_SELLSTOP){
+               OrdOpenPrice = ND(OrderOpenPrice());
+               EntryPrice = ND(Bid - vPending_Distance);
+               if (EntryPrice <= OrdOpenPrice) break;
                   NewSL = ND(EntryPrice + StopLoss * Point);
                   ModifyOrder = OrderModify(OrderTicket(), EntryPrice, NewSL, OrderTakeProfit(), 0, Orange);
                     if (ModifyOrder) break;
                         Print("SELLSTOP Modify Error Code: " + GetLastError() + " Message: "  + " OP: " + DoubleToStr(EntryPrice, Digits) + " SL: " + DoubleToStr(NewSL, Digits) +
-                           " Bid: " + DoubleToStr(Bid, Digits) + " Ask: " + DoubleToStr(Ask, Digits));  
-                        break;
+                           " Bid: " + DoubleToStr(Bid, Digits) + " Ask: " + DoubleToStr(Ask, Digits));
+               break;
             }    
-            
          }
       }
    }
@@ -314,62 +284,50 @@ double Lot() {
 }
 
 void fDisplayInfo() {
-
-string SpreadInfo = "AvgSpread:" + DoubleToStr(AvgSpread, Digits) + "  Commission:" + DoubleToStr(PipCommission, Digits + 1) + "  Real Avg. Spread:" + DoubleToStr(RealAvgSpread,
-      Digits + 1);
+   string SpreadInfo = "AvgSpread:" + DoubleToStr(AvgSpread, Digits) + "  Commission:" + DoubleToStr(PipCommission, Digits + 1) + "  Real Avg. Spread:" + DoubleToStr(RealAvgSpread, Digits + 1);
 
    if (RealAvgSpread > vMaxSpread) {
-      
-         Comment( " -----------------------------------------------------------------------", 
-            "\n ----------->> !SpeedTrap EA Setting << ----------------", 
-            "\n -----------------------------------------------------------------------", 
-            "\n :: Server                           : ", AccountServer(),
-            "\n :: Account Name /Number   : ", AccountName(), "/ ", AccountNumber(),
-            "\n :: Leverage                        : 1 : ", AccountLeverage(),
-            "\n :: Risk Setting                    : ", Risk, 
-            "\n :: Lots                              : ", DoubleToStr(Lot(), 2), 
-            "\n :: EA Setting                     : ", EACmt,
-            "\n --------------------------------------------------------------------------",
-            "\n :: Spread Exceed Limit!! ( " + DoubleToStr(RealAvgSpread, Digits + 1) + " > " + DoubleToStr(vMaxSpread, Digits + 1) + " )"
-            "\n --------------------------------------------------------------------------");
-      
-
+      Comment(" -----------------------------------------------------------------------", 
+         "\n ----------->> SakhaSpeed Setting << ----------------", 
+         "\n -----------------------------------------------------------------------", 
+         "\n :: Server                           : ", AccountServer(),
+         "\n :: Account Name /Number   : ", AccountName(), "/ ", AccountNumber(),
+         "\n :: Leverage                        : 1 : ", AccountLeverage(),
+         "\n :: Risk Setting                    : ", Risk, 
+         "\n :: Lots                              : ", DoubleToStr(Lot(), 2), 
+         "\n :: EA Setting                     : ", EACmt,
+         "\n --------------------------------------------------------------------------",
+         "\n :: Spread Exceed Limit!! ( " + DoubleToStr(RealAvgSpread, Digits + 1) + " > " + DoubleToStr(vMaxSpread, Digits + 1) + " )"
+         "\n --------------------------------------------------------------------------");
    } else if(MarginForOneLot*Lot() > AccMargin) {
-   
-         Comment( " ------------------------------------------------------------------------------------", 
-            "\n ----------->> !SpeedTrap EA Setting << -----------------------------", 
-            "\n -----------------------------------------------------------------------------------", 
-            "\n :: Server                           : ", AccountServer(),
-            "\n :: Account Name /Number   : ", AccountName(), "/ ", AccountNumber(),
-            "\n :: Leverage                        : 1 : ", AccountLeverage(),
-            "\n :: Risk Setting                    : ", Risk, 
-            "\n :: Lots                              : ", DoubleToStr(Lot(), 2),
-            "\n :: EA Setting                     : ", EACmt,
-          
-            "\n",
-            "\n :: Margin for ", Lot()," Lot is  ", AccountCurrency(), DoubleToStr(MarginForOneLot*Lot(), 2),            
-            "\n :: Account Margin ", AccountCurrency(), AccMargin, " Too Small Or Leverage Too Low",             
-            "\n ------------------------------------------------------------------------------------");
-            
-  } else {
-          
-         Comment( " ------------------------------------------------------------------------------------", 
-            "\n ----------->> SakhaSpeed<< -----------------------------", 
-            "\n -----------------------------------------------------------------------------------", 
-            "\n :: Server                           : ", AccountServer(),
-            "\n :: Account Name /Number   : ", AccountName(), "/ ", AccountNumber(),
-            "\n :: Leverage                        : 1 : ", AccountLeverage(),
-            "\n :: Risk Setting                    : ", Risk, 
-            "\n :: Lots                              : ", DoubleToStr(Lot(), 2),
-            "\n :: EA Setting                     : ", EACmt,
-          
-            "\n",
-            "\n :: EA Running OK!!! Please OFF Debug Mode To Reduce Latency",       
-            "\n ------------------------------------------------------------------------------------"); 
-            }
+      Comment(" ------------------------------------------------------------------------------------", 
+         "\n ----------->> SakhaSpeed << -----------------------------", 
+         "\n -----------------------------------------------------------------------------------", 
+         "\n :: Server                           : ", AccountServer(),
+         "\n :: Account Name /Number   : ", AccountName(), "/ ", AccountNumber(),
+         "\n :: Leverage                        : 1 : ", AccountLeverage(),
+         "\n :: Risk Setting                    : ", Risk, 
+         "\n :: Lots                              : ", DoubleToStr(Lot(), 2),
+         "\n :: EA Setting                     : ", EACmt,
+         "\n",
+         "\n :: Margin for ", Lot()," Lot is  ", AccountCurrency(), DoubleToStr(MarginForOneLot*Lot(), 2),            
+         "\n :: Account Margin ", AccountCurrency(), AccMargin, " Too Small Or Leverage Too Low",             
+         "\n ------------------------------------------------------------------------------------");
+   } else {
+      Comment(" ------------------------------------------------------------------------------------", 
+         "\n ----------->> SakhaSpeed<< -----------------------------", 
+         "\n -----------------------------------------------------------------------------------", 
+         "\n :: Server                           : ", AccountServer(),
+         "\n :: Account Name /Number   : ", AccountName(), "/ ", AccountNumber(),
+         "\n :: Leverage                        : 1 : ", AccountLeverage(),
+         "\n :: Risk Setting                    : ", Risk, 
+         "\n :: Lots                              : ", DoubleToStr(Lot(), 2),
+         "\n :: EA Setting                     : ", EACmt,
+         "\n",
+         "\n :: EA Running OK!!! Please OFF Debug Mode To Reduce Latency",       
+         "\n ------------------------------------------------------------------------------------"); 
+   }
 }
-
-//////////  End of DispalyInfo Function //////////////////////////////////////////////
 
 double ND(double ND_Ret) {
    return (NormalizeDouble(ND_Ret, Digits));
