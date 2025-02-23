@@ -1,0 +1,366 @@
+#property copyright "Copyright 2025, Sakha"
+#property link      "https://shopee.co.id/algotrade"
+#property version   "1.01" // Version updated to 1.01
+#property description "Sakha Property with Donchian Channel Filter"
+
+// Input parameters
+input ulong   MagicNumber = 123456;          // Magic Number
+input double  LotSize = 0.1;                 // Lot Size (Initial, Risk per trade will override)
+input double  RiskPercent = 1.0;             // Risk per trade (%)
+input int     StopLoss = 50;                 // Stop Loss (points)
+input int     TakeProfit = 100;              // Take Profit (points)
+input int     TrailingStop = 20;             // Trailing Stop (points)
+input int     BreakEven = 10;                // Break Even (points)
+input int     MaxSpread = 10;                // Max Allowed Spread (points)
+input ENUM_TIMEFRAMES Timeframe = PERIOD_CURRENT;      // High/Low Timeframe
+input string  OrderComment = "HLStrategy_DC";     // Order Comment
+input ENUM_TIMEFRAMES DonchianTimeframe = PERIOD_W1; // Donchian Channel Timeframe
+input int             DonchianPeriod = 20;          // Donchian Channel Period
+
+// Global variables
+datetime lastBarTime;
+double currentHigh, currentLow;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   lastBarTime = 0;
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   if(!CheckSpread()) return;
+
+   if(IsNewBar())
+   {
+      UpdateLevels();
+      ManagePendingOrders();
+   }
+
+   ManageOpenPositions();
+}
+
+//+------------------------------------------------------------------+
+//| Check spread conditions                                          |
+//+------------------------------------------------------------------+
+bool CheckSpread()
+{
+   int spread = (int)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+   if(spread > MaxSpread)
+   {
+      CancelAllPending();
+      return false;
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Check for new bar formation                                      |
+//+------------------------------------------------------------------+
+bool IsNewBar()
+{
+   datetime currentBarTime = iTime(Symbol(), Timeframe, 0);
+   if(currentBarTime != lastBarTime)
+   {
+      lastBarTime = currentBarTime;
+      return true;
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Structure to hold Donchian Channel levels                       |
+//+------------------------------------------------------------------+
+struct DonchianLevels
+{
+    double upperBand;
+    double lowerBand;
+};
+
+//+------------------------------------------------------------------+
+//| Calculate Donchian Channel levels                                |
+//+------------------------------------------------------------------+
+DonchianLevels CalculateDonchianChannel(ENUM_TIMEFRAMES donchianTF, int donchianPeriod)
+{
+    DonchianLevels levels;
+    int barsToCount = donchianPeriod;
+    if (barsToCount <= 0) barsToCount = 20; // Default period if invalid
+    int startBar = 1; // Start from previous bar
+
+    double highestHigh = iHigh(Symbol(), donchianTF, startBar);
+    for (int i = startBar + 1; i <= barsToCount + startBar - 1; i++)
+    {
+        double tempHigh = iHigh(Symbol(), donchianTF, i);
+        if (tempHigh > highestHigh)
+        {
+            highestHigh = tempHigh;
+        }
+    }
+    levels.upperBand = highestHigh;
+
+    double lowestLow = iLow(Symbol(), donchianTF, startBar);
+    for (int i = startBar + 1; i <= barsToCount + startBar - 1; i++)
+    {
+        double tempLow = iLow(Symbol(), donchianTF, i);
+        if (tempLow < lowestLow)
+        {
+            lowestLow = tempLow;
+        }
+    }
+    levels.lowerBand = lowestLow;
+    return levels;
+}
+
+//+------------------------------------------------------------------+
+//| Update high/low levels and Donchian Channel                      |
+//+------------------------------------------------------------------+
+void UpdateLevels()
+{
+   currentHigh = iHigh(Symbol(), Timeframe, 1);
+   currentLow = iLow(Symbol(), Timeframe, 1);
+}
+
+//+------------------------------------------------------------------+
+//| Manage pending orders                                            |
+//+------------------------------------------------------------------+
+void ManagePendingOrders()
+{
+   bool buyStopFound = false, sellStopFound = false;
+   ulong buyTicket = 0, sellTicket = 0;
+
+   DonchianLevels donchian = CalculateDonchianChannel(DonchianTimeframe, DonchianPeriod);
+   double donchianUpperBand = donchian.upperBand;
+   double donchianLowerBand = donchian.lowerBand;
+
+   double askPrice = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double bidPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+
+
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket <= 0) continue;
+
+      if(OrderGetInteger(ORDER_MAGIC) == MagicNumber &&
+         OrderGetString(ORDER_COMMENT) == OrderComment)
+      {
+         ENUM_ORDER_TYPE type = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+         if(type == ORDER_TYPE_BUY_STOP)
+         {
+            buyStopFound = true;
+            buyTicket = ticket;
+            CheckModifyOrder(buyTicket, currentHigh, ORDER_TYPE_BUY_STOP);
+         }
+         else if(type == ORDER_TYPE_SELL_STOP)
+         {
+            sellStopFound = true;
+            sellTicket = ticket;
+            CheckModifyOrder(sellTicket, currentLow, ORDER_TYPE_SELL_STOP);
+         }
+      }
+   }
+
+   // Place Buy Stop only if current high is above previous high AND currentHigh is above Donchian Upper Band
+   if(!buyStopFound && currentHigh > donchianUpperBand) PlacePendingOrder(ORDER_TYPE_BUY_STOP, currentHigh);
+
+   // Place Sell Stop only if current low is below previous low AND currentLow is below Donchian Lower Band
+   if(!sellStopFound && currentLow < donchianLowerBand) PlacePendingOrder(ORDER_TYPE_SELL_STOP, currentLow);
+}
+
+//+------------------------------------------------------------------+
+//| Check and modify existing order                                  |
+//+------------------------------------------------------------------+
+void CheckModifyOrder(ulong ticket, double newPrice, ENUM_ORDER_TYPE type)
+{
+   double currentPrice = OrderGetDouble(ORDER_PRICE_OPEN);
+   if(currentPrice == newPrice) return;
+
+   double sl = (type == ORDER_TYPE_BUY_STOP) ?
+               newPrice - StopLoss * _Point :
+               newPrice + StopLoss * _Point;
+   double tp = (type == ORDER_TYPE_BUY_STOP) ?
+               newPrice + TakeProfit * _Point :
+               newPrice - TakeProfit * _Point;
+
+   MqlTradeRequest request;
+   MqlTradeResult result;
+   ZeroMemory(request);
+   ZeroMemory(result);
+
+   request.action = TRADE_ACTION_MODIFY;
+   request.order = ticket;
+   request.price = newPrice;
+   request.sl = sl;
+   request.tp = tp;
+
+   if(!OrderSend(request, result))
+   {
+      Print("OrderModify failed. Error code: ", result.retcode);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Place new pending order                                          |
+//+------------------------------------------------------------------+
+void PlacePendingOrder(ENUM_ORDER_TYPE type, double price)
+{
+   double sl = (type == ORDER_TYPE_BUY_STOP) ?
+               price - StopLoss * _Point :
+               price + StopLoss * _Point;
+   double tp = (type == ORDER_TYPE_BUY_STOP) ?
+               price + TakeProfit * _Point :
+               price - TakeProfit * _Point;
+
+   MqlTradeRequest request;
+   MqlTradeResult result;
+   ZeroMemory(request);
+   ZeroMemory(result);
+
+   request.action = TRADE_ACTION_PENDING;
+   request.symbol = Symbol();
+   request.volume = CalculateLotSize();
+   request.type = type;
+   request.price = price;
+   request.sl = sl;
+   request.tp = tp;
+   request.deviation = 5;
+   request.magic = MagicNumber;
+   request.comment = OrderComment;
+
+   if(!OrderSend(request, result))
+   {
+      Print("OrderSend failed. Error code: ", result.retcode);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate lot size based on risk percentage                      |
+//+------------------------------------------------------------------+
+double CalculateLotSize()
+{
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double tick_value = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+   if(tick_value == 0) tick_value = 0.1;
+
+   double risk_amount = balance * RiskPercent / 100.0;
+   double lotSize = NormalizeDouble(risk_amount / (StopLoss * tick_value), 2);
+
+   double minLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
+
+   if(lotSize < minLot) lotSize = minLot;
+   if(lotSize > maxLot) lotSize = maxLot;
+
+   return lotSize;
+}
+
+//+------------------------------------------------------------------+
+//| Cancel all pending orders                                        |
+//+------------------------------------------------------------------+
+void CancelAllPending()
+{
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket <= 0) continue;
+
+      if(OrderGetInteger(ORDER_MAGIC) == MagicNumber &&
+         OrderGetString(ORDER_COMMENT) == OrderComment)
+      {
+         MqlTradeRequest request;
+         MqlTradeResult result;
+         ZeroMemory(request);
+         ZeroMemory(result);
+
+         request.action = TRADE_ACTION_REMOVE;
+         request.order = ticket;
+         if(!OrderSend(request, result))
+         {
+            Print("OrderCancel failed. Error code: ", result.retcode);
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Manage open positions with trailing and breakeven                |
+//+------------------------------------------------------------------+
+void ManageOpenPositions()
+{
+   UpdateLevels(); // Update high/low levels for next orders
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket <= 0) continue;
+
+      if(PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
+         PositionGetString(POSITION_COMMENT) == OrderComment)
+      {
+         ManagePosition(ticket);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Manage single position                                           |
+//+------------------------------------------------------------------+
+void ManagePosition(ulong ticket)
+{
+   ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   double currentPrice = (type == POSITION_TYPE_BUY) ? SymbolInfoDouble(Symbol(), SYMBOL_BID) : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   double currentSl = PositionGetDouble(POSITION_SL);
+   double pointsProfit = MathAbs(currentPrice - openPrice) / _Point;
+
+   // Check if the position is at breakeven
+   bool isAtBreakeven = (type == POSITION_TYPE_BUY && currentSl >= openPrice) ||
+                       (type == POSITION_TYPE_SELL && currentSl <= openPrice);
+
+   // If not at breakeven, check if we can move to breakeven
+   if(!isAtBreakeven && pointsProfit >= BreakEven)
+   {
+      double newSl = openPrice + (type == POSITION_TYPE_BUY ? 1 * _Point : -1 * _Point);
+      ModifyPositionSl(ticket, newSl);
+   }
+   // If already at breakeven, manage trailing stop
+   else if(isAtBreakeven && pointsProfit >= TrailingStop)
+   {
+      double newSl = currentPrice - (type == POSITION_TYPE_BUY ?
+                     TrailingStop * _Point : -TrailingStop * _Point);
+
+      if((type == POSITION_TYPE_BUY && newSl > currentSl) ||
+         (type == POSITION_TYPE_SELL && newSl < currentSl))
+      {
+         ModifyPositionSl(ticket, newSl);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Modify position's stop loss                                     |
+//+------------------------------------------------------------------+
+void ModifyPositionSl(ulong ticket, double newSl)
+{
+   MqlTradeRequest request;
+   MqlTradeResult result;
+   ZeroMemory(request);
+   ZeroMemory(result);
+
+   request.action = TRADE_ACTION_SLTP;
+   request.position = ticket;
+   request.symbol = Symbol();
+   request.sl = newSl;
+   request.tp = PositionGetDouble(POSITION_TP);
+
+   if(!OrderSend(request, result))
+   {
+      Print("ModifyPositionSL failed. Error code: ", result.retcode);
+   }
+}
