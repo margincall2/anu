@@ -3,8 +3,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, Sakha"
 #property link      "https://shopee.co.id/algotrade"
-#property version   "1.01" // Version updated to 1.01
-#property description "Sakha Property with Donchian Channel Filter"
+#property version   "1.02" // Version updated to 1.02 (added commission)
+#property description "Sakha Property with Donchian Channel Filter with Commission"
 
 //+------------------------------------------------------------------+
 //| Input Parameters                                                   |
@@ -14,6 +14,7 @@ input ulong   MagicNumber = 123456;          // Magic Number
 input double  LotSize = 0.1;                 // Lot Size (Initial, Risk per trade will override)
 input double  RiskPercent = 1.0;             // Risk per trade (%)
 input string  OrderComment = "HLStrategy_DC"; // Order Comment
+input double  Commission = 3.0;              // Commission per trade in account currency
 
 // Risk Management Parameters
 input int     StopLoss = 50;                 // Stop Loss (points)
@@ -146,6 +147,10 @@ void ManagePendingOrders()
    double askPrice = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double bidPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
 
+   // Include commission in price calculations
+   double effectiveUpperBand = donchianUpperBand + (Commission / (LotSize * 100000)); // Adjusting for commission
+   double effectiveLowerBand = donchianLowerBand - (Commission / (LotSize * 100000)); // Adjusting for commission
+
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       ulong ticket = OrderGetTicket(i);
@@ -170,10 +175,10 @@ void ManagePendingOrders()
       }
    }
 
-   if(!buyStopFound && currentHigh > donchianUpperBand) 
+   if(!buyStopFound && currentHigh > effectiveUpperBand) 
       PlacePendingOrder(ORDER_TYPE_BUY_STOP, currentHigh);
 
-   if(!sellStopFound && currentLow < donchianLowerBand) 
+   if(!sellStopFound && currentLow < effectiveLowerBand) 
       PlacePendingOrder(ORDER_TYPE_SELL_STOP, currentLow);
 }
 
@@ -182,12 +187,16 @@ void CheckModifyOrder(ulong ticket, double newPrice, ENUM_ORDER_TYPE type)
    double currentPrice = OrderGetDouble(ORDER_PRICE_OPEN);
    if(currentPrice == newPrice) return;
 
+   // Adjust stop loss and take profit levels considering commission
+   double commissionInPoints = Commission / (LotSize * SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE));
+   
    double sl = (type == ORDER_TYPE_BUY_STOP) ?
-               newPrice - StopLoss * _Point :
-               newPrice + StopLoss * _Point;
+               newPrice - (StopLoss + commissionInPoints) * _Point :
+               newPrice + (StopLoss + commissionInPoints) * _Point;
+   
    double tp = (type == ORDER_TYPE_BUY_STOP) ?
-               newPrice + TakeProfit * _Point :
-               newPrice - TakeProfit * _Point;
+               newPrice + (TakeProfit - commissionInPoints) * _Point :
+               newPrice - (TakeProfit - commissionInPoints) * _Point;
 
    MqlTradeRequest request;
    MqlTradeResult result;
@@ -208,12 +217,16 @@ void CheckModifyOrder(ulong ticket, double newPrice, ENUM_ORDER_TYPE type)
 
 void PlacePendingOrder(ENUM_ORDER_TYPE type, double price)
 {
+   // Adjust stop loss and take profit levels considering commission
+   double commissionInPoints = Commission / (LotSize * SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE));
+   
    double sl = (type == ORDER_TYPE_BUY_STOP) ?
-               price - StopLoss * _Point :
-               price + StopLoss * _Point;
+               price - (StopLoss + commissionInPoints) * _Point :
+               price + (StopLoss + commissionInPoints) * _Point;
+   
    double tp = (type == ORDER_TYPE_BUY_STOP) ?
-               price + TakeProfit * _Point :
-               price - TakeProfit * _Point;
+               price + (TakeProfit - commissionInPoints) * _Point :
+               price - (TakeProfit - commissionInPoints) * _Point;
 
    MqlTradeRequest request;
    MqlTradeResult result;
@@ -263,20 +276,27 @@ void ManagePosition(ulong ticket)
    double currentPrice = (type == POSITION_TYPE_BUY) ? SymbolInfoDouble(Symbol(), SYMBOL_BID) : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double currentSl = PositionGetDouble(POSITION_SL);
-   double pointsProfit = MathAbs(currentPrice - openPrice) / _Point;
+   
+   // Calculate real points profit considering commission
+   double commissionInPoints = Commission / (LotSize * SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE));
+   double pointsProfit = (MathAbs(currentPrice - openPrice) / _Point) - commissionInPoints;
 
    bool isAtBreakeven = (type == POSITION_TYPE_BUY && currentSl >= openPrice) ||
                        (type == POSITION_TYPE_SELL && currentSl <= openPrice);
 
    if(!isAtBreakeven && pointsProfit >= BreakEven)
    {
-      double newSl = openPrice + (type == POSITION_TYPE_BUY ? 1 * _Point : -1 * _Point);
+      // Add commission buffer to breakeven level
+      double newSl = openPrice + (type == POSITION_TYPE_BUY ? 
+                    (1 + commissionInPoints) * _Point : 
+                    (-1 - commissionInPoints) * _Point);
       ModifyPositionSl(ticket, newSl);
    }
    else if(isAtBreakeven && pointsProfit >= TrailingStop)
    {
       double newSl = currentPrice - (type == POSITION_TYPE_BUY ?
-                     TrailingStop * _Point : -TrailingStop * _Point);
+                     (TrailingStop + commissionInPoints) * _Point : 
+                     -(TrailingStop + commissionInPoints) * _Point);
 
       if((type == POSITION_TYPE_BUY && newSl > currentSl) ||
          (type == POSITION_TYPE_SELL && newSl < currentSl))
@@ -314,8 +334,10 @@ double CalculateLotSize()
    double tick_value = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
    if(tick_value == 0) tick_value = 0.1;
 
+   // Include commission in risk calculation
    double risk_amount = balance * RiskPercent / 100.0;
-   double lotSize = NormalizeDouble(risk_amount / (StopLoss * tick_value), 2);
+   double totalRiskPerPoint = StopLoss * tick_value + Commission; // Add commission to risk calculation
+   double lotSize = NormalizeDouble(risk_amount / totalRiskPerPoint, 2);
 
    double minLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
