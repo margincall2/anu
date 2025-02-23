@@ -6,6 +6,9 @@
 #property version   "1.03"
 #property description "Sakha Property with Donchian Channel Filter with Commission"
 
+// Hapus include Trade.h karena tidak diperlukan
+//#include <Trade\Trade.h>
+
 // Cache frequently used string constant
 #define ORDER_COMMENT_CONST "HLStrategy_DC"
 
@@ -50,6 +53,18 @@ struct DonchianLevels {
     double upperBand;
     double lowerBand;
 };
+
+//+------------------------------------------------------------------+
+//| Function Declarations                                              |
+//+------------------------------------------------------------------+
+void CancelAllPending();
+double CalculateLotSize();
+void ModifyPositionSl(const ulong ticket, const double newSl);
+void ManagePosition(const ulong ticket);
+void CheckModifyOrder(const ulong ticket, const double newPrice, const ENUM_ORDER_TYPE type);
+void PlacePendingOrder(const ENUM_ORDER_TYPE type, const double price);
+void CancelOppositeOrders(ENUM_ORDER_TYPE orderType);
+DonchianLevels CalculateDonchianChannel(const ENUM_TIMEFRAMES donchianTF, const int donchianPeriod);
 
 //+------------------------------------------------------------------+
 //| Expert Initialization Function                                     |
@@ -231,10 +246,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
 {
     // Check if this is an order execution
     if(trans.type == TRADE_TRANSACTION_ORDER_ADD ||
-       trans.type == TRADE_TRANSACTION_POSITION_OPEN)
+       trans.type == TRADE_TRANSACTION_POSITION)
     {
         // Check if it's our EA's order
-        if(trans.order_magic == MagicNumber)
+        if(trans.magic_number == MagicNumber)  // Perbaikan disini
         {
             // If a buy stop was executed, cancel sell stop
             if(trans.order_type == ORDER_TYPE_BUY_STOP)
@@ -247,105 +262,6 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
                 CancelOppositeOrders(ORDER_TYPE_BUY_STOP);
             }
         }
-    }
-}
-
-void CancelOppositeOrders(ENUM_ORDER_TYPE orderType)
-{
-    static MqlTradeRequest request;
-    static MqlTradeResult result;
-    
-    const int totalOrders = OrdersTotal();
-    for(int i = totalOrders - 1; i >= 0; i--)
-    {
-        ulong ticket = OrderGetTicket(i);
-        if(ticket <= 0) continue;
-
-        if(OrderGetInteger(ORDER_MAGIC) == MagicNumber &&
-           OrderGetString(ORDER_COMMENT) == OrderComment &&
-           OrderGetInteger(ORDER_TYPE) == orderType)
-        {
-            ZeroMemory(request);
-            ZeroMemory(result);
-
-            request.action = TRADE_ACTION_REMOVE;
-            request.order = ticket;
-            
-            if(!OrderSend(request, result))
-            {
-                Print("Cancel opposite order failed. Error code: ", result.retcode);
-            }
-            else
-            {
-                Print("Cancelled opposite order after execution: ", ticket);
-            }
-        }
-    }
-}
-
-void CheckModifyOrder(const ulong ticket, const double newPrice, const ENUM_ORDER_TYPE type)
-{
-    const double currentPrice = OrderGetDouble(ORDER_PRICE_OPEN);
-    if(currentPrice == newPrice) return;
-
-    const double commissionInPoints = Commission / (LotSize * tickValue);
-    
-    const double sl = (type == ORDER_TYPE_BUY_STOP) ?
-                newPrice - (StopLoss + commissionInPoints) * pointValue :
-                newPrice + (StopLoss + commissionInPoints) * pointValue;
-    
-    const double tp = (type == ORDER_TYPE_BUY_STOP) ?
-                newPrice + (TakeProfit - commissionInPoints) * pointValue :
-                newPrice - (TakeProfit - commissionInPoints) * pointValue;
-
-    static MqlTradeRequest request;
-    static MqlTradeResult result;
-    ZeroMemory(request);
-    ZeroMemory(result);
-
-    request.action = TRADE_ACTION_MODIFY;
-    request.order = ticket;
-    request.price = newPrice;
-    request.sl = sl;
-    request.tp = tp;
-
-    if(!OrderSend(request, result))
-    {
-        Print("OrderModify failed. Error code: ", result.retcode);
-    }
-}
-
-void PlacePendingOrder(const ENUM_ORDER_TYPE type, const double price)
-{
-    const double commissionInPoints = Commission / (LotSize * tickValue);
-    
-    const double sl = (type == ORDER_TYPE_BUY_STOP) ?
-                price - (StopLoss + commissionInPoints) * pointValue :
-                price + (StopLoss + commissionInPoints) * pointValue;
-    
-    const double tp = (type == ORDER_TYPE_BUY_STOP) ?
-                price + (TakeProfit - commissionInPoints) * pointValue :
-                price - (TakeProfit - commissionInPoints) * pointValue;
-
-    static MqlTradeRequest request;
-    static MqlTradeResult result;
-    ZeroMemory(request);
-    ZeroMemory(result);
-
-    request.action = TRADE_ACTION_PENDING;
-    request.symbol = currentSymbol;
-    request.volume = CalculateLotSize();
-    request.type = type;
-    request.price = price;
-    request.sl = sl;
-    request.tp = tp;
-    request.deviation = 5;
-    request.magic = MagicNumber;
-    request.comment = OrderComment;
-
-    if(!OrderSend(request, result))
-    {
-        Print("OrderSend failed. Error code: ", result.retcode);
     }
 }
 
@@ -407,9 +323,6 @@ void ManagePosition(const ulong ticket)
 }
 
 void ModifyPositionSl(const ulong ticket, const double newSl)
-{
-    static MqlTradeRequest request;
-    static MqlTradeResult result;void ModifyPositionSl(const ulong ticket, const double newSl)
 {
     static MqlTradeRequest request;
     static MqlTradeResult result;
