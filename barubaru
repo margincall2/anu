@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //| Sakha Break V3 - Universal Pair Support                            |
 //+------------------------------------------------------------------+
-#property copyright "Copyright 2025, Sakha"
+#property copyright "Copyright 2025, Margincall2"
 #property link      "https://shopee.co.id/algotrade"
 #property version   "3.00"
 #property strict
@@ -206,7 +206,16 @@ void CheckModifyOrder(ulong ticket, double newPrice, ENUM_ORDER_TYPE type)
    request.sl = sl;
    request.tp = tp;
 
-   OrderSend(request, result);
+   if(!OrderSend(request, result))
+   {
+      Print("Failed to modify order #", ticket, ", Error: ", GetLastError());
+      return;
+   }
+   
+   if(result.retcode != TRADE_RETCODE_DONE)
+   {
+      Print("Order modify failed with retcode: ", result.retcode);
+   }
 }
 
 void PlacePendingOrder(ENUM_ORDER_TYPE type, double price)
@@ -236,7 +245,16 @@ void PlacePendingOrder(ENUM_ORDER_TYPE type, double price)
    request.magic = MagicNumber;
    request.comment = OrderComment;
 
-   OrderSend(request, result);
+   if(!OrderSend(request, result))
+   {
+      Print("Failed to place pending order, Error: ", GetLastError());
+      return;
+   }
+   
+   if(result.retcode != TRADE_RETCODE_DONE)
+   {
+      Print("Order placement failed with retcode: ", result.retcode);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -307,7 +325,16 @@ void ModifyPositionSL(const ulong ticket, const double newSL)
    request.sl = newSL;
    request.tp = PositionGetDouble(POSITION_TP);
 
-   OrderSend(request, result);
+   if(!OrderSend(request, result))
+   {
+      Print("Failed to modify position SL #", ticket, ", Error: ", GetLastError());
+      return;
+   }
+   
+   if(result.retcode != TRADE_RETCODE_DONE)
+   {
+      Print("Position SL modify failed with retcode: ", result.retcode);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -347,9 +374,32 @@ void DeletePendingOrders()
          MqlTradeResult result = {};
          
          request.action = TRADE_ACTION_REMOVE;
+         request.order = ticket;void DeletePendingOrders()
+{
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(!OrderSelect(ticket)) continue;
+      
+      if(OrderGetInteger(ORDER_MAGIC) == MagicNumber && 
+         OrderGetString(ORDER_SYMBOL) == Symbol())
+      {
+         MqlTradeRequest request = {};
+         MqlTradeResult result = {};
+         
+         request.action = TRADE_ACTION_REMOVE;
          request.order = ticket;
          
-         OrderSend(request, result);
+         if(!OrderSend(request, result))
+         {
+            Print("Failed to delete order #", ticket, ", Error: ", GetLastError());
+            continue;
+         }
+         
+         if(result.retcode != TRADE_RETCODE_DONE)
+         {
+            Print("Order deletion failed with retcode: ", result.retcode);
+         }
       }
    }
 }
