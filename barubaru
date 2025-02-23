@@ -1,47 +1,48 @@
 //+------------------------------------------------------------------+
-//| Sakha Property with Donchian Channel Filter                        |
+//| Sakha Break V3 - Universal Pair Support                            |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, Sakha"
 #property link      "https://shopee.co.id/algotrade"
-#property version   "1.03" // Version updated to 1.03 (universal pair support)
-#property description "Sakha Property with Donchian Channel Filter with Commission - Universal Pair Support"
+#property version   "3.00"
+#property strict
 
 //+------------------------------------------------------------------+
 //| Input Parameters                                                   |
 //+------------------------------------------------------------------+
-// Trading Parameters
-input ulong   MagicNumber = 123456;          // Magic Number
-input double  LotSize = 0.1;                 // Lot Size (Initial, Risk per trade will override)
-input double  RiskPercent = 1.0;             // Risk per trade (%)
-input string  OrderComment = "HLStrategy_DC"; // Order Comment
-input double  Commission = 3.0;              // Commission per trade in account currency
+input group "Trading Parameters"
+input ulong   MagicNumber    = 123456;          // Magic Number
+input double  LotSize        = 0.1;             // Lot Size
+input double  RiskPercent    = 1.0;             // Risk Percent (%)
+input string  OrderComment   = "SakhaBreak_V3"; // Order Comment
+input double  Commission     = 3.0;             // Commission per trade
 
-// Risk Management Parameters
-input int     StopLoss = 50;                 // Stop Loss (points)
-input int     TakeProfit = 100;              // Take Profit (points)
-input int     TrailingStop = 20;             // Trailing Stop (points)
-input int     BreakEven = 10;                // Break Even (points)
-input int     MaxSpread = 10;                // Max Allowed Spread (points)
+input group "Risk Management"
+input int     StopLoss       = 50;              // Stop Loss (points)
+input int     TakeProfit     = 100;             // Take Profit (points)
+input int     TrailingStop   = 20;              // Trailing Stop (points)
+input int     BreakEven      = 10;              // Break Even (points)
+input int     MaxSpread      = 10;              // Max Allowed Spread (points)
 
-// Timeframe Settings
-input ENUM_TIMEFRAMES Timeframe = PERIOD_CURRENT;      // High/Low Timeframe
-input ENUM_TIMEFRAMES DonchianTimeframe = PERIOD_W1;   // Donchian Channel Timeframe
-input int             DonchianPeriod = 20;            // Donchian Channel Period
+input group "Timeframe Settings"
+input ENUM_TIMEFRAMES Timeframe         = PERIOD_CURRENT; // Trading Timeframe
+input ENUM_TIMEFRAMES DonchianTimeframe = PERIOD_W1;     // Donchian Timeframe
+input int             DonchianPeriod    = 20;            // Donchian Period
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
-datetime lastBarTime;
-double currentHigh, currentLow;
-double pointValue;     // Value of one point for the symbol
-double adjustedPoint;  // Adjusted point value based on digits
+datetime    g_lastBarTime    = 0;
+double      g_pointValue     = 0.0;
+double      g_adjustedPoint  = 0.0;
+int         g_digits         = 0;
 
 //+------------------------------------------------------------------+
-//| Struct Definition                                                  |
+//| Struct for Donchian Channel                                        |
 //+------------------------------------------------------------------+
-struct DonchianLevels {
-    double upperBand;
-    double lowerBand;
+struct DonchianLevels 
+{
+   double upperBand;
+   double lowerBand;
 };
 
 //+------------------------------------------------------------------+
@@ -49,24 +50,26 @@ struct DonchianLevels {
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   lastBarTime = 0;
+   // Initialize symbol-specific values
+   g_digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   g_adjustedPoint = NormalizeDouble(SymbolInfoDouble(Symbol(), SYMBOL_POINT), g_digits);
    
-   // Initialize point-related values
-   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
-   adjustedPoint = NormalizeDouble(SymbolInfoDouble(Symbol(), SYMBOL_POINT), digits);
+   // Adjust point value for 3/5 digit pairs
+   g_pointValue = (g_digits == 3 || g_digits == 5) ? g_adjustedPoint * 10.0 : g_adjustedPoint;
    
-   // Calculate point value based on symbol digits
-   if(digits == 3 || digits == 5)
-      pointValue = adjustedPoint * 10;
-   else
-      pointValue = adjustedPoint;
-      
-   Print("Symbol: ", Symbol());
-   Print("Digits: ", digits);
-   Print("Point: ", adjustedPoint);
-   Print("Point Value: ", pointValue);
-   
+   // Log initialization details
+   PrintFormat("Symbol: %s, Digits: %d, Point: %.8f, PointValue: %.8f", 
+               Symbol(), g_digits, g_adjustedPoint, g_pointValue);
+               
    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                   |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   // Clean up
 }
 
 //+------------------------------------------------------------------+
@@ -74,287 +77,293 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   if(!CheckSpread()) return;
-
+   if(!CheckMarketConditions()) return;
+   
    if(IsNewBar())
    {
-      UpdateLevels();
       ManagePendingOrders();
    }
-
+   
    ManageOpenPositions();
 }
 
 //+------------------------------------------------------------------+
-//| Trading Condition Functions                                        |
+//| Market condition checking                                          |
 //+------------------------------------------------------------------+
-bool CheckSpread()
+bool CheckMarketConditions()
 {
    double currentSpread = SymbolInfoDouble(Symbol(), SYMBOL_ASK) - SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   double normalizedSpread = NormalizeDouble(currentSpread / pointValue, 1);
+   currentSpread = NormalizeDouble(currentSpread / g_pointValue, 1);
    
-   if(normalizedSpread > MaxSpread)
+   if(currentSpread > MaxSpread)
    {
-      CancelAllPending();
+      DeletePendingOrders();
       return false;
    }
    return true;
 }
 
+//+------------------------------------------------------------------+
+//| New bar detection                                                  |
+//+------------------------------------------------------------------+
 bool IsNewBar()
 {
    datetime currentBarTime = iTime(Symbol(), Timeframe, 0);
-   if(currentBarTime != lastBarTime)
+   if(currentBarTime != g_lastBarTime)
    {
-      lastBarTime = currentBarTime;
+      g_lastBarTime = currentBarTime;
       return true;
    }
    return false;
 }
 
 //+------------------------------------------------------------------+
-//| Price Conversion Functions                                         |
+//| Price conversion functions                                         |
 //+------------------------------------------------------------------+
-double PointsToPrice(int points)
+double PointsToPrice(const int points)
 {
-   return NormalizeDouble(points * pointValue, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
+   return NormalizeDouble(points * g_pointValue, g_digits);
 }
 
 double GetCommissionInPoints()
 {
    double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-   if(tickValue == 0) tickValue = 0.1;
+   if(tickValue <= 0) tickValue = 0.1;
    
    return NormalizeDouble(Commission / (LotSize * tickValue), 1);
 }
 
 //+------------------------------------------------------------------+
-//| Donchian Channel Calculations                                      |
-//+------------------------------------------------------------------+
-DonchianLevels CalculateDonchianChannel(ENUM_TIMEFRAMES donchianTF, int donchianPeriod)
-{
-    DonchianLevels levels;
-    int barsToCount = donchianPeriod;
-    if (barsToCount <= 0) barsToCount = 20;
-    int startBar = 1;
-
-    double highestHigh = iHigh(Symbol(), donchianTF, startBar);
-    double lowestLow = iLow(Symbol(), donchianTF, startBar);
-
-    for (int i = startBar + 1; i <= barsToCount + startBar - 1; i++)
-    {
-        highestHigh = MathMax(highestHigh, iHigh(Symbol(), donchianTF, i));
-        lowestLow = MathMin(lowestLow, iLow(Symbol(), donchianTF, i));
-    }
-    
-    levels.upperBand = NormalizeDouble(highestHigh, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-    levels.lowerBand = NormalizeDouble(lowestLow, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-    return levels;
-}
-
-void UpdateLevels()
-{
-   currentHigh = NormalizeDouble(iHigh(Symbol(), Timeframe, 1), SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-   currentLow = NormalizeDouble(iLow(Symbol(), Timeframe, 1), SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-}
-
-//+------------------------------------------------------------------+
-//| Order Management Functions                                         |
-//+------------------------------------------------------------------+
-void ManagePendingOrders()
-{
-   bool buyStopFound = false, sellStopFound = false;
-   ulong buyTicket = 0, sellTicket = 0;
-
-   DonchianLevels donchian = CalculateDonchianChannel(DonchianTimeframe, DonchianPeriod);
-   
-   double commissionAdjustment = GetCommissionInPoints() * pointValue;
-   double effectiveUpperBand = NormalizeDouble(donchian.upperBand + commissionAdjustment, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-   double effectiveLowerBand = NormalizeDouble(donchian.lowerBand - commissionAdjustment, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-
-   for(int i = OrdersTotal() - 1; i >= 0; i--)
-   {
-      ulong ticket = OrderGetTicket(i);
-      if(ticket <= 0) continue;
-
-      if(OrderGetInteger(ORDER_MAGIC) == MagicNumber &&
-         OrderGetString(ORDER_COMMENT) == OrderComment)
-      {
-         ENUM_ORDER_TYPE type = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
-         if(type == ORDER_TYPE_BUY_STOP)
-         {
-            buyStopFound = true;
-            buyTicket = ticket;
-            CheckModifyOrder(buyTicket, currentHigh, ORDER_TYPE_BUY_STOP);
-         }
-         else if(type == ORDER_TYPE_SELL_STOP)
-         {
-            sellStopFound = true;
-            sellTicket = ticket;
-            CheckModifyOrder(sellTicket, currentLow, ORDER_TYPE_SELL_STOP);
-         }
-      }
-   }
-
-   if(!buyStopFound && currentHigh > effectiveUpperBand) 
-      PlacePendingOrder(ORDER_TYPE_BUY_STOP, currentHigh);
-
-   if(!sellStopFound && currentLow < effectiveLowerBand) 
-      PlacePendingOrder(ORDER_TYPE_SELL_STOP, currentLow);
-}
-
-void CheckModifyOrder(ulong ticket, double newPrice, ENUM_ORDER_TYPE type)
-{
-   double currentPrice = OrderGetDouble(ORDER_PRICE_OPEN);
-   if(currentPrice == newPrice) return;
-
-   double commissionPoints = GetCommissionInPoints() * pointValue;
-   
-   double sl = (type == ORDER_TYPE_BUY_STOP) ?
-               NormalizeDouble(newPrice - PointsToPrice(StopLoss) - commissionPoints, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS)) :
-               NormalizeDouble(newPrice + PointsToPrice(StopLoss) + commissionPoints, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-   
-   double tp = (type == ORDER_TYPE_BUY_STOP) ?
-               NormalizeDouble(newPrice + PointsToPrice(TakeProfit) - commissionPoints, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS)) :
-               NormalizeDouble(newPrice - PointsToPrice(TakeProfit) + commissionPoints, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-
-   MqlTradeRequest request = {};
-   MqlTradeResult result = {};
-
-   request.action = TRADE_ACTION_MODIFY;
-   request.order = ticket;
-   request.price = NormalizeDouble(newPrice, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-   request.sl = sl;
-   request.tp = tp;
-
-   if(!OrderSend(request, result))
-   {
-      Print("OrderModify failed. Error code: ", result.retcode);
-   }
-}
-
-void PlacePendingOrder(ENUM_ORDER_TYPE type, double price)
-{
-   double commissionPoints = GetCommissionInPoints() * pointValue;
-   
-   double sl = (type == ORDER_TYPE_BUY_STOP) ?
-               NormalizeDouble(price - PointsToPrice(StopLoss) - commissionPoints, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS)) :
-               NormalizeDouble(price + PointsToPrice(StopLoss) + commissionPoints, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-   
-   double tp = (type == ORDER_TYPE_BUY_STOP) ?
-               NormalizeDouble(price + PointsToPrice(TakeProfit) - commissionPoints, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS)) :
-               NormalizeDouble(price - PointsToPrice(TakeProfit) + commissionPoints, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-
-   MqlTradeRequest request = {};
-   MqlTradeResult result = {};
-
-   request.action = TRADE_ACTION_PENDING;
-   request.symbol = Symbol();
-   request.volume = CalculateLotSize();
-   request.type = type;
-   request.price = NormalizeDouble(price, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-   request.sl = sl;
-   request.tp = tp;
-   request.deviation = 5;
-   request.magic = MagicNumber;
-   request.comment = OrderComment;
-
-   if(!OrderSend(request, result))
-   {
-      Print("OrderSend failed. Error code: ", result.retcode);
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Position Management Functions                                      |
-//+------------------------------------------------------------------+
-void ManageOpenPositions()
-{
-   UpdateLevels();
-
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket <= 0) continue;
-
-      if(PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
-         PositionGetString(POSITION_COMMENT) == OrderComment)
-      {
-         ManagePosition(ticket);
-      }
-   }
-}
-
-void ManagePosition(ulong ticket)
-{
-   ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-   double currentPrice = (type == POSITION_TYPE_BUY) ? 
-                        SymbolInfoDouble(Symbol(), SYMBOL_BID) : 
-                        SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   double currentSl = PositionGetDouble(POSITION_SL);
-   
-   double commissionPoints = GetCommissionInPoints() * pointValue;
-   double pointsProfit = (MathAbs(currentPrice - openPrice) / pointValue) - GetCommissionInPoints();
-
-   bool isAtBreakeven = (type == POSITION_TYPE_BUY && currentSl >= openPrice) ||
-                       (type == POSITION_TYPE_SELL && currentSl <= openPrice);
-
-   if(!isAtBreakeven && pointsProfit >= BreakEven)
-   {
-      double newSl = NormalizeDouble(openPrice + (type == POSITION_TYPE_BUY ? 
-                    (pointValue + commissionPoints) : 
-                    -(pointValue + commissionPoints)), SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-      ModifyPositionSl(ticket, newSl);
-   }
-   else if(isAtBreakeven && pointsProfit >= TrailingStop)
-   {
-      double newSl = NormalizeDouble(currentPrice - (type == POSITION_TYPE_BUY ?
-                     (PointsToPrice(TrailingStop) + commissionPoints) : 
-                     -(PointsToPrice(TrailingStop) + commissionPoints)), SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-
-      if((type == POSITION_TYPE_BUY && newSl > currentSl) ||
-         (type == POSITION_TYPE_SELL && newSl < currentSl))
-      {
-         ModifyPositionSl(ticket, newSl);
-      }
-   }
-}
-
-void ModifyPositionSl(ulong ticket, double newSl)
-{
-   MqlTradeRequest request = {};
-   MqlTradeResult result = {};
-
-   request.action = TRADE_ACTION_SLTP;
-   request.position = ticket;
-   request.symbol = Symbol();
-   request.sl = NormalizeDouble(newSl, SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-   request.tp = PositionGetDouble(POSITION_TP);
-
-   if(!OrderSend(request, result))
-   {
-      Print("ModifyPositionSL failed. Error code: ", result.retcode);
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Utility Functions                                                  |
+//| Calculate position size                                            |
 //+------------------------------------------------------------------+
 double CalculateLotSize()
 {
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
-   if(tickValue == 0) tickValue = 0.1;
+   if(tickValue <= 0) tickValue = 0.1;
 
-   double risk_amount = balance * RiskPercent / 100.0;
-   double totalRiskPerPoint = StopLoss * tickValue + Commission;
-   double lotSize = NormalizeDouble(risk_amount / totalRiskPerPoint, 2);
-
+   double riskAmount = balance * RiskPercent / 100.0;
+   double totalRisk = (StopLoss * tickValue) + Commission;
+   
+   double lotSize = NormalizeDouble(riskAmount / totalRisk, 2);
+   
+   // Normalize lot size
    double minLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
    double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+   
+   lotSize = MathFloor(lotSize / lotStep) * lotStep;
+   lotSize = MathMax(minLot, MathMin(maxLot, lotSize));
+   
+   return lotSize;
+}
 
-   lotSize = MathFloor(lotSize / lotStep) * lotStep; // Normalize to lot step
+//+------------------------------------------------------------------+
+//| Calculate Donchian Channel levels                                  |
+//+------------------------------------------------------------------+
+DonchianLevels CalculateDonchianChannel()
+{
+   DonchianLevels levels;
    
+   double highestHigh = iHigh(Symbol(), DonchianTimeframe, iHighest(Symbol(), DonchianTimeframe, MODE_HIGH, DonchianPeriod, 1));
+   double lowestLow = iLow(Symbol(), DonchianTimeframe, iLowest(Symbol(), DonchianTimeframe, MODE_LOW, DonchianPeriod, 1));
    
+   levels.upperBand = NormalizeDouble(highestHigh, g_digits);
+   levels.lowerBand = NormalizeDouble(lowestLow, g_digits);
+   
+   return levels;
+}
+
+//+------------------------------------------------------------------+
+//| Manage pending orders                                             |
+//+------------------------------------------------------------------+
+void ManagePendingOrders()
+{
+   DonchianLevels levels = CalculateDonchianChannel();
+   double commissionAdjustment = GetCommissionInPoints() * g_pointValue;
+   
+   double upperEntry = NormalizeDouble(levels.upperBand + commissionAdjustment, g_digits);
+   double lowerEntry = NormalizeDouble(levels.lowerBand - commissionAdjustment, g_digits);
+   
+   bool buyExists = false, sellExists = false;
+   
+   // Check existing orders
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      if(OrderSelect(i, SELECT_BY_POS))
+      {
+         if(OrderMagicNumber() == MagicNumber && OrderSymbol() == Symbol())
+         {
+            if(OrderType() == ORDER_TYPE_BUY_STOP) 
+               buyExists = true;
+            else if(OrderType() == ORDER_TYPE_SELL_STOP) 
+               sellExists = true;
+         }
+      }
+   }
+   
+   // Place new orders if needed
+   if(!buyExists) 
+      PlaceOrder(ORDER_TYPE_BUY_STOP, upperEntry);
+   if(!sellExists) 
+      PlaceOrder(ORDER_TYPE_SELL_STOP, lowerEntry);
+}
+
+//+------------------------------------------------------------------+
+//| Place new order                                                   |
+//+------------------------------------------------------------------+
+void PlaceOrder(const ENUM_ORDER_TYPE type, const double price)
+{
+   double volume = CalculateLotSize();
+   double commissionPoints = GetCommissionInPoints() * g_pointValue;
+   
+   double sl = (type == ORDER_TYPE_BUY_STOP) ?
+               NormalizeDouble(price - PointsToPrice(StopLoss) - commissionPoints, g_digits) :
+               NormalizeDouble(price + PointsToPrice(StopLoss) + commissionPoints, g_digits);
+               
+   double tp = (type == ORDER_TYPE_BUY_STOP) ?
+               NormalizeDouble(price + PointsToPrice(TakeProfit) - commissionPoints, g_digits) :
+               NormalizeDouble(price - PointsToPrice(TakeProfit) + commissionPoints, g_digits);
+   
+   MqlTradeRequest request = {};
+   MqlTradeResult result = {};
+   
+   request.action = TRADE_ACTION_PENDING;
+   request.symbol = Symbol();
+   request.volume = volume;
+   request.type = type;
+   request.price = NormalizeDouble(price, g_digits);
+   request.sl = sl;
+   request.tp = tp;
+   request.deviation = 5;
+   request.magic = MagicNumber;
+   request.comment = OrderComment;
+   
+   if(!OrderSend(request, result))
+      PrintFormat("OrderSend error %d", GetLastError());
+}
+
+//+------------------------------------------------------------------+
+//| Manage open positions                                             |
+//+------------------------------------------------------------------+
+void ManageOpenPositions()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket <= 0) continue;
+      
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
+            PositionGetString(POSITION_SYMBOL) == Symbol())
+         {
+            ManagePosition(ticket);
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Manage individual position                                         |
+//+------------------------------------------------------------------+
+void ManagePosition(const ulong ticket)
+{
+   ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   double currentPrice = (type == POSITION_TYPE_BUY) ? 
+                        SymbolInfoDouble(Symbol(), SYMBOL_BID) : 
+                        SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+                        
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   double currentSL = PositionGetDouble(POSITION_SL);
+   
+   double commissionPoints = GetCommissionInPoints() * g_pointValue;
+   double pointsProfit = (MathAbs(currentPrice - openPrice) / g_pointValue) - GetCommissionInPoints();
+   
+   bool isAtBreakeven = (type == POSITION_TYPE_BUY && currentSL >= openPrice) ||
+                       (type == POSITION_TYPE_SELL && currentSL <= openPrice);
+                       
+   if(!isAtBreakeven && pointsProfit >= BreakEven)
+   {
+      ModifyPosition(ticket, type, openPrice, commissionPoints);
+   }
+   else if(isAtBreakeven && pointsProfit >= TrailingStop)
+   {
+      TrailPosition(ticket, type, currentPrice, currentSL, commissionPoints);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Modify position stop loss                                         |
+//+------------------------------------------------------------------+
+void ModifyPosition(const ulong ticket, const ENUM_POSITION_TYPE type, 
+                   const double openPrice, const double commissionPoints)
+{
+   double newSL = NormalizeDouble(openPrice + (type == POSITION_TYPE_BUY ? 
+                 (g_pointValue + commissionPoints) : 
+                 -(g_pointValue + commissionPoints)), g_digits);
+                 
+   MqlTradeRequest request = {};
+   MqlTradeResult result = {};
+   
+   request.action = TRADE_ACTION_SLTP;
+   request.position = ticket;
+   request.symbol = Symbol();
+   request.sl = newSL;
+   request.tp = PositionGetDouble(POSITION_TP);
+   
+   if(!OrderSend(request, result))
+      PrintFormat("ModifyPosition error %d", GetLastError());
+}
+
+//+------------------------------------------------------------------+
+//| Trail position stop loss                                          |
+//+------------------------------------------------------------------+
+void TrailPosition(const ulong ticket, const ENUM_POSITION_TYPE type,
+                  const double currentPrice, const double currentSL,
+                  const double commissionPoints)
+{
+   double newSL = NormalizeDouble(currentPrice - (type == POSITION_TYPE_BUY ?
+                 (PointsToPrice(TrailingStop) + commissionPoints) : 
+                 -(PointsToPrice(TrailingStop) + commissionPoints)), g_digits);
+                 
+   if((type == POSITION_TYPE_BUY && newSL > currentSL) ||
+      (type == POSITION_TYPE_SELL && newSL < currentSL))
+   {
+      MqlTradeRequest request = {};
+      MqlTradeResult result = {};
+      
+      request.action = TRADE_ACTION_SLTP;
+      request.position = ticket;
+      request.symbol = Symbol();
+      request.sl = newSL;
+      request.tp = PositionGetDouble(POSITION_TP);
+      
+      if(!OrderSend(request, result))
+         PrintFormat("TrailPosition error %d", GetLastError());
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Delete all pending orders                                         |
+//+------------------------------------------------------------------+
+void DeletePendingOrders()
+{
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      if(OrderSelect(i, SELECT_BY_POS))
+      {
+         if(OrderMagicNumber() == MagicNumber && OrderSymbol() == Symbol())
+         {
+            MqlTradeRequest request = {};
+            MqlTradeResult result = {};
+            
+            request.action = TRADE_ACTION_REMOVE;
+            request.order = OrderTicket();
+            
+            if(!OrderSend(request, result))
+               PrintFormat("DeletePendingOrders error %d", GetLastError());
+         }
+      }
+   }
+}
