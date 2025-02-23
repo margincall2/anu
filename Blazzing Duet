@@ -1,0 +1,186 @@
+//+------------------------------------------------------------------+
+//|                                    BlazzingDuet_V3_Special.mq5    |
+//|                     Copyright 2025, margincall2 (Special Edition) |
+//|                                    https://github.com/margincall2  |
+//+------------------------------------------------------------------+
+#property copyright   "Copyright 2025, margincall2"
+#property link       "https://github.com/margincall2"
+#property version    "3.0"
+#property strict
+#property description "BlazzingDuet V3 - Special Edition with Magic Egg System"
+
+// Core Parameters
+input double LotSize = 0.01;          // Lot Size
+input int    StopLoss = 60;           // Stop Loss (points)
+input int    TakeProfit = 120;        // Take Profit (points)
+input int    MagicNumber = 2327;      // Magic Number
+
+// Special Duet Parameters
+input int    FastPeriod = 13;         // Fast EMA Period
+input int    SlowPeriod = 34;         // Slow EMA Period
+input double EggNestZone = 0.0008;    // Magic Egg Nest Zone (spread)
+input bool   UseEggProtection = true; // Enable Magic Egg Protection
+
+// Global Variables
+int g_ticket = 0;
+bool g_isTrading = false;
+datetime g_lastBar = 0;
+double g_eggNestPrice = 0;
+int g_consecutiveWins = 0;
+
+//+------------------------------------------------------------------+
+//| Magic Egg System Functions                                        |
+//+------------------------------------------------------------------+
+bool IsEggNestFormed()
+{
+    double ema13 = iMA(Symbol(), PERIOD_CURRENT, FastPeriod, 0, MODE_EMA, PRICE_CLOSE, 0);
+    double ema34 = iMA(Symbol(), PERIOD_CURRENT, SlowPeriod, 0, MODE_EMA, PRICE_CLOSE, 0);
+    
+    // Magic Egg Nest Formation Check
+    if(MathAbs(ema13 - ema34) < EggNestZone)
+    {
+        g_eggNestPrice = (ema13 + ema34) / 2;
+        return true;
+    }
+    return false;
+}
+
+bool IsEggHatching()
+{
+    if(!UseEggProtection) return true;
+    
+    double rsi = iRSI(Symbol(), PERIOD_CURRENT, 14, PRICE_CLOSE, 0);
+    double macd = iMACD(Symbol(), PERIOD_CURRENT, 12, 26, 9, PRICE_CLOSE, MODE_MAIN, 0);
+    
+    // Magic Egg Hatching Conditions
+    bool isRsiValid = (rsi > 40 && rsi < 60);
+    bool isMacdValid = MathAbs(macd) < 0.0002;
+    
+    return (isRsiValid && isMacdValid);
+}
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                     |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    Print("🥚 BlazzingDuet V3 Special with Magic Egg started!");
+    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                              |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+    datetime currentBar = iTime(Symbol(), PERIOD_CURRENT, 0);
+    bool isNewBar = (currentBar != g_lastBar);
+    
+    if(isNewBar)
+    {
+        g_lastBar = currentBar;
+        
+        // Magic Egg System Check
+        if(IsEggNestFormed() && IsEggHatching())
+        {
+            CheckDuetSignals();
+        }
+    }
+    
+    if(g_isTrading)
+    {
+        ManageDuetPositions();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Blazzing Duet Trading Logic                                       |
+//+------------------------------------------------------------------+
+void CheckDuetSignals()
+{
+    if(g_isTrading) return;
+    
+    double ema13 = iMA(Symbol(), PERIOD_CURRENT, FastPeriod, 0, MODE_EMA, PRICE_CLOSE, 0);
+    double ema34 = iMA(Symbol(), PERIOD_CURRENT, SlowPeriod, 0, MODE_EMA, PRICE_CLOSE, 0);
+    double momentum = iMomentum(Symbol(), PERIOD_CURRENT, 14, PRICE_CLOSE, 0);
+    
+    // Dynamic Lot Sizing based on consecutive wins
+    double dynamicLot = LotSize * (1.0 + (g_consecutiveWins * 0.1));
+    if(dynamicLot > 0.05) dynamicLot = 0.05; // Safety cap
+    
+    // Blazzing Buy Signal
+    if(ema13 > ema34 && momentum > 100.5)
+    {
+        double buyStop = Ask + (EggNestZone * 2);
+        g_ticket = OrderSend(Symbol(), OP_BUYSTOP, dynamicLot, buyStop, 3, 
+                           buyStop - StopLoss*Point, buyStop + TakeProfit*Point,
+                           "🔥 BlazzingDuet Buy", MagicNumber, 
+                           TimeCurrent() + 60*60, clrGreen); // 1 hour expiry
+        
+        if(g_ticket > 0)
+        {
+            g_isTrading = true;
+            Print("🥚 Magic Egg Buy Signal - Momentum: ", momentum);
+        }
+    }
+    
+    // Blazzing Sell Signal
+    if(ema13 < ema34 && momentum < 99.5)
+    {
+        double sellStop = Bid - (EggNestZone * 2);
+        g_ticket = OrderSend(Symbol(), OP_SELLSTOP, dynamicLot, sellStop, 3,
+                           sellStop + StopLoss*Point, sellStop - TakeProfit*Point,
+                           "🔥 BlazzingDuet Sell", MagicNumber,
+                           TimeCurrent() + 60*60, clrRed); // 1 hour expiry
+        
+        if(g_ticket > 0)
+        {
+            g_isTrading = true;
+            Print("🥚 Magic Egg Sell Signal - Momentum: ", momentum);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Blazzing Position Management                                      |
+//+------------------------------------------------------------------+
+void ManageDuetPositions()
+{
+    for(int i=0; i<OrdersTotal(); i++)
+    {
+        if(OrderSelect(i, SELECT_BY_POS) && OrderMagicNumber() == MagicNumber)
+        {
+            // Track winning trades
+            if(OrderProfit() > 0)
+            {
+                // Dynamic Break-Even + Runner Strategy
+                if(OrderProfit() >= (OrderLots() * 10))  // $10 per 0.01 lot
+                {
+                    double newSL = OrderOpenPrice();
+                    double newTP = OrderTakeProfit() + (TakeProfit * Point * 0.5);
+                    
+                    if(OrderModify(OrderTicket(), OrderOpenPrice(), newSL, 
+                                 newTP, 0, clrBlue))
+                    {
+                        Print("🎯 Runner activated! New TP: ", newTP);
+                    }
+                }
+            }
+            
+            // Check for closed positions
+            if(OrderCloseTime() > 0)
+            {
+                if(OrderProfit() > 0)
+                {
+                    g_consecutiveWins++;
+                    Print("🏆 Win streak: ", g_consecutiveWins);
+                }
+                else
+                {
+                    g_consecutiveWins = 0;
+                }
+                g_isTrading = false;
+            }
+        }
+    }
+}
