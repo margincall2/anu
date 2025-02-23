@@ -1,0 +1,1138 @@
+//+------------------------------------------------------------------+
+//| 📊 Performance Analytics Dashboard                                |
+//+------------------------------------------------------------------+
+class CPerformanceAnalytics
+{
+private:
+    struct DailyStats
+    {
+        double profit;
+        double maxDrawdown;
+        int totalTrades;
+        int winningTrades;
+        double winRate;
+        double profitFactor;
+        double averageWin;
+        double averageLoss;
+        datetime lastUpdate;
+    };
+    
+    DailyStats dailyStats;
+    
+public:
+    void Initialize()
+    {
+        ZeroMemory(dailyStats);
+        dailyStats.lastUpdate = TimeCurrent();
+    }
+    
+    void UpdateStats()
+    {
+        if(IsNewDay())
+        {
+            // Reset daily stats
+            ZeroMemory(dailyStats);
+        }
+        
+        HistorySelect(0, TimeCurrent());
+        
+        for(int i = HistoryDealsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = HistoryDealGetTicket(i);
+            if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != MagicNumber) continue;
+            
+            double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+            if(profit > 0) 
+            {
+                dailyStats.winningTrades++;
+                dailyStats.averageWin = (dailyStats.averageWin * (dailyStats.winningTrades-1) + profit) 
+                                      / dailyStats.winningTrades;
+            }
+            else if(profit < 0)
+            {
+                dailyStats.averageLoss = (dailyStats.averageLoss * (dailyStats.totalTrades - dailyStats.winningTrades) 
+                                       + MathAbs(profit)) 
+                                       / (dailyStats.totalTrades - dailyStats.winningTrades + 1);
+            }
+            
+            dailyStats.profit += profit;
+            dailyStats.totalTrades++;
+        }
+        
+        if(dailyStats.totalTrades > 0)
+        {
+            dailyStats.winRate = (double)dailyStats.winningTrades / dailyStats.totalTrades * 100;
+            dailyStats.profitFactor = (dailyStats.averageWin * dailyStats.winningTrades) / 
+                                    (MathAbs(dailyStats.averageLoss) * (dailyStats.totalTrades - dailyStats.winningTrades));
+        }
+        
+        ShowDashboard();
+    }
+    
+private:
+    void ShowDashboard()
+    {
+        string dashText = "🎯 BLAZZING DUET PERFORMANCE 📊\n";
+        dashText += "--------------------------------\n";
+        dashText += StringFormat("Daily Profit: %.2f\n", dailyStats.profit);
+        dashText += StringFormat("Win Rate: %.1f%%\n", dailyStats.winRate);
+        dashText += StringFormat("Profit Factor: %.2f\n", dailyStats.profitFactor);
+        dashText += StringFormat("Total Trades: %d\n", dailyStats.totalTrades);
+        dashText += "--------------------------------\n";
+        dashText += StringFormat("Avg Win: %.2f | Avg Loss: %.2f\n", 
+                               dailyStats.averageWin, MathAbs(dailyStats.averageLoss));
+                               
+        Comment(dashText);
+    }
+    
+    bool IsNewDay()
+    {
+        static datetime lastDay = 0;
+        datetime currentDay = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
+        
+        if(currentDay > lastDay)
+        {
+            lastDay = currentDay;
+            return true;
+        }
+        return false;
+    }
+};
+
+//+------------------------------------------------------------------+
+//| 🔔 Smart Alert System                                            |
+//+------------------------------------------------------------------+
+class CSmartAlerts
+{
+private:
+    struct AlertCondition
+    {
+        bool isTriggered;
+        datetime lastAlert;
+        int priority;  // 1-High, 2-Medium, 3-Low
+        string message;
+    };
+    
+    AlertCondition alerts[];
+    
+public:
+    void Initialize()
+    {
+        ArrayResize(alerts, 5);
+        for(int i = 0; i < ArraySize(alerts); i++)
+        {
+            alerts[i].isTriggered = false;
+            alerts[i].lastAlert = 0;
+            alerts[i].priority = 3;
+        }
+    }
+    
+    void CheckAlerts()
+    {
+        // 🎯 Market Condition Alerts
+        if(g_marketState.isVolatile && !alerts[0].isTriggered)
+        {
+            SendAlert("⚠️ High Volatility Detected!", 1);
+            alerts[0].isTriggered = true;
+        }
+        
+        // 💫 Performance Alerts
+        if(dailyStats.winRate < 40 && dailyStats.totalTrades > 5)
+        {
+            SendAlert("🔴 Warning: Win Rate Below Threshold", 1);
+        }
+        
+        // 📊 Risk Management Alerts
+        double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double drawdown = (1 - equity/balance) * 100;
+        
+        if(drawdown > 5)
+        {
+            SendAlert(StringFormat("⚠️ Drawdown Alert: %.1f%%", drawdown), 1);
+        }
+        
+        // 🎭 Pattern Recognition Alerts
+        if(IsKeyLevelApproaching())
+        {
+            SendAlert("🎯 Approaching Key Level!", 2);
+        }
+    }
+    
+private:
+    void SendAlert(string message, int priority)
+    {
+        if(priority == 1)  // High Priority
+        {
+            Alert(message);
+            SendNotification(message);  // Mobile notification
+        }
+        else if(priority == 2)  // Medium Priority
+        {
+            Alert(message);
+        }
+        else  // Low Priority
+        {
+            Print(message);
+        }
+    }
+    
+    bool IsKeyLevelApproaching()
+    {
+        double bb_upper[], bb_lower[];
+        ArraySetAsSeries(bb_upper, true);
+        ArraySetAsSeries(bb_lower, true);
+        
+        CopyBuffer(handleBB, 0, 0, 1, bb_upper);
+        CopyBuffer(handleBB, 2, 0, 1, bb_lower);
+        
+        double price = SymbolInfoDouble(currentSymbol, SYMBOL_BID);
+        double distance = MathMin(MathAbs(price - bb_upper[0]), 
+                                MathAbs(price - bb_lower[0]));
+                                
+        return distance < g_marketState.atr * 0.2;
+    }
+};
+//+------------------------------------------------------------------+
+//| 📊 Performance Analytics Dashboard                                |
+//+------------------------------------------------------------------+
+class CPerformanceAnalytics
+{
+private:
+    struct DailyStats
+    {
+        double profit;
+        double maxDrawdown;
+        int totalTrades;
+        int winningTrades;
+        double winRate;
+        double profitFactor;
+        double averageWin;
+        double averageLoss;
+        datetime lastUpdate;
+    };
+    
+    DailyStats dailyStats;
+    
+public:
+    void Initialize()
+    {
+        ZeroMemory(dailyStats);
+        dailyStats.lastUpdate = TimeCurrent();
+    }
+    
+    void UpdateStats()
+    {
+        if(IsNewDay())
+        {
+            // Reset daily stats
+            ZeroMemory(dailyStats);
+        }
+        
+        HistorySelect(0, TimeCurrent());
+        
+        for(int i = HistoryDealsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = HistoryDealGetTicket(i);
+            if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != MagicNumber) continue;
+            
+            double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+            if(profit > 0) 
+            {
+                dailyStats.winningTrades++;
+                dailyStats.averageWin = (dailyStats.averageWin * (dailyStats.winningTrades-1) + profit) 
+                                      / dailyStats.winningTrades;
+            }
+            else if(profit < 0)
+            {
+                dailyStats.averageLoss = (dailyStats.averageLoss * (dailyStats.totalTrades - dailyStats.winningTrades) 
+                                       + MathAbs(profit)) 
+                                       / (dailyStats.totalTrades - dailyStats.winningTrades + 1);
+            }
+            
+            dailyStats.profit += profit;
+            dailyStats.totalTrades++;
+        }
+        
+        if(dailyStats.totalTrades > 0)
+        {
+            dailyStats.winRate = (double)dailyStats.winningTrades / dailyStats.totalTrades * 100;
+            dailyStats.profitFactor = (dailyStats.averageWin * dailyStats.winningTrades) / 
+                                    (MathAbs(dailyStats.averageLoss) * (dailyStats.totalTrades - dailyStats.winningTrades));
+        }
+        
+        ShowDashboard();
+    }
+    
+private:
+    void ShowDashboard()
+    {
+        string dashText = "🎯 BLAZZING DUET PERFORMANCE 📊\n";
+        dashText += "--------------------------------\n";
+        dashText += StringFormat("Daily Profit: %.2f\n", dailyStats.profit);
+        dashText += StringFormat("Win Rate: %.1f%%\n", dailyStats.winRate);
+        dashText += StringFormat("Profit Factor: %.2f\n", dailyStats.profitFactor);
+        dashText += StringFormat("Total Trades: %d\n", dailyStats.totalTrades);
+        dashText += "--------------------------------\n";
+        dashText += StringFormat("Avg Win: %.2f | Avg Loss: %.2f\n", 
+                               dailyStats.averageWin, MathAbs(dailyStats.averageLoss));
+                               
+        Comment(dashText);
+    }
+    
+    bool IsNewDay()
+    {
+        static datetime lastDay = 0;
+        datetime currentDay = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
+        
+        if(currentDay > lastDay)
+        {
+            lastDay = currentDay;
+            return true;
+        }
+        return false;
+    }
+};
+
+//+------------------------------------------------------------------+
+//| 🔔 Smart Alert System                                            |
+//+------------------------------------------------------------------+
+class CSmartAlerts
+{
+private:
+    struct AlertCondition
+    {
+        bool isTriggered;
+        datetime lastAlert;
+        int priority;  // 1-High, 2-Medium, 3-Low
+        string message;
+    };
+    
+    AlertCondition alerts[];
+    
+public:
+    void Initialize()
+    {
+        ArrayResize(alerts, 5);
+        for(int i = 0; i < ArraySize(alerts); i++)
+        {
+            alerts[i].isTriggered = false;
+            alerts[i].lastAlert = 0;
+            alerts[i].priority = 3;
+        }
+    }
+    
+    void CheckAlerts()
+    {
+        // 🎯 Market Condition Alerts
+        if(g_marketState.isVolatile && !alerts[0].isTriggered)
+        {
+            SendAlert("⚠️ High Volatility Detected!", 1);
+            alerts[0].isTriggered = true;
+        }
+        
+        // 💫 Performance Alerts
+        if(dailyStats.winRate < 40 && dailyStats.totalTrades > 5)
+        {
+            SendAlert("🔴 Warning: Win Rate Below Threshold", 1);
+        }
+        
+        // 📊 Risk Management Alerts
+        double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double drawdown = (1 - equity/balance) * 100;
+        
+        if(drawdown > 5)
+        {
+            SendAlert(StringFormat("⚠️ Drawdown Alert: %.1f%%", drawdown), 1);
+        }
+        
+        // 🎭 Pattern Recognition Alerts
+        if(IsKeyLevelApproaching())
+        {
+            SendAlert("🎯 Approaching Key Level!", 2);
+        }
+    }
+    
+private:
+    void SendAlert(string message, int priority)
+    {
+        if(priority == 1)  // High Priority
+        {
+            Alert(message);
+            SendNotification(message);  // Mobile notification
+        }
+        else if(priority == 2)  // Medium Priority
+        {
+            Alert(message);
+        }
+        else  // Low Priority
+        {
+            Print(message);
+        }
+    }
+    
+    bool IsKeyLevelApproaching()
+    {
+        double bb_upper[], bb_lower[];
+        ArraySetAsSeries(bb_upper, true);
+        ArraySetAsSeries(bb_lower, true);
+        
+        CopyBuffer(handleBB, 0, 0, 1, bb_upper);
+        CopyBuffer(handleBB, 2, 0, 1, bb_lower);
+        
+        double price = SymbolInfoDouble(currentSymbol, SYMBOL_BID);
+        double distance = MathMin(MathAbs(price - bb_upper[0]), 
+                                MathAbs(price - bb_lower[0]));
+                                
+        return distance < g_marketState.atr * 0.2;
+    }
+};
+//+------------------------------------------------------------------+
+//| 📊 Performance Analytics Dashboard                                |
+//+------------------------------------------------------------------+
+class CPerformanceAnalytics
+{
+private:
+    struct DailyStats
+    {
+        double profit;
+        double maxDrawdown;
+        int totalTrades;
+        int winningTrades;
+        double winRate;
+        double profitFactor;
+        double averageWin;
+        double averageLoss;
+        datetime lastUpdate;
+    };
+    
+    DailyStats dailyStats;
+    
+public:
+    void Initialize()
+    {
+        ZeroMemory(dailyStats);
+        dailyStats.lastUpdate = TimeCurrent();
+    }
+    
+    void UpdateStats()
+    {
+        if(IsNewDay())
+        {
+            // Reset daily stats
+            ZeroMemory(dailyStats);
+        }
+        
+        HistorySelect(0, TimeCurrent());
+        
+        for(int i = HistoryDealsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = HistoryDealGetTicket(i);
+            if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != MagicNumber) continue;
+            
+            double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+            if(profit > 0) 
+            {
+                dailyStats.winningTrades++;
+                dailyStats.averageWin = (dailyStats.averageWin * (dailyStats.winningTrades-1) + profit) 
+                                      / dailyStats.winningTrades;
+            }
+            else if(profit < 0)
+            {
+                dailyStats.averageLoss = (dailyStats.averageLoss * (dailyStats.totalTrades - dailyStats.winningTrades) 
+                                       + MathAbs(profit)) 
+                                       / (dailyStats.totalTrades - dailyStats.winningTrades + 1);
+            }
+            
+            dailyStats.profit += profit;
+            dailyStats.totalTrades++;
+        }
+        
+        if(dailyStats.totalTrades > 0)
+        {
+            dailyStats.winRate = (double)dailyStats.winningTrades / dailyStats.totalTrades * 100;
+            dailyStats.profitFactor = (dailyStats.averageWin * dailyStats.winningTrades) / 
+                                    (MathAbs(dailyStats.averageLoss) * (dailyStats.totalTrades - dailyStats.winningTrades));
+        }
+        
+        ShowDashboard();
+    }
+    
+private:
+    void ShowDashboard()
+    {
+        string dashText = "🎯 BLAZZING DUET PERFORMANCE 📊\n";
+        dashText += "--------------------------------\n";
+        dashText += StringFormat("Daily Profit: %.2f\n", dailyStats.profit);
+        dashText += StringFormat("Win Rate: %.1f%%\n", dailyStats.winRate);
+        dashText += StringFormat("Profit Factor: %.2f\n", dailyStats.profitFactor);
+        dashText += StringFormat("Total Trades: %d\n", dailyStats.totalTrades);
+        dashText += "--------------------------------\n";
+        dashText += StringFormat("Avg Win: %.2f | Avg Loss: %.2f\n", 
+                               dailyStats.averageWin, MathAbs(dailyStats.averageLoss));
+                               
+        Comment(dashText);
+    }
+    
+    bool IsNewDay()
+    {
+        static datetime lastDay = 0;
+        datetime currentDay = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
+        
+        if(currentDay > lastDay)
+        {
+            lastDay = currentDay;
+            return true;
+        }
+        return false;
+    }
+};
+
+//+------------------------------------------------------------------+
+//| 🔔 Smart Alert System                                            |
+//+------------------------------------------------------------------+
+class CSmartAlerts
+{
+private:
+    struct AlertCondition
+    {
+        bool isTriggered;
+        datetime lastAlert;
+        int priority;  // 1-High, 2-Medium, 3-Low
+        string message;
+    };
+    
+    AlertCondition alerts[];
+    
+public:
+    void Initialize()
+    {
+        ArrayResize(alerts, 5);
+        for(int i = 0; i < ArraySize(alerts); i++)
+        {
+            alerts[i].isTriggered = false;
+            alerts[i].lastAlert = 0;
+            alerts[i].priority = 3;
+        }
+    }
+    
+    void CheckAlerts()
+    {
+        // 🎯 Market Condition Alerts
+        if(g_marketState.isVolatile && !alerts[0].isTriggered)
+        {
+            SendAlert("⚠️ High Volatility Detected!", 1);
+            alerts[0].isTriggered = true;
+        }
+        
+        // 💫 Performance Alerts
+        if(dailyStats.winRate < 40 && dailyStats.totalTrades > 5)
+        {
+            SendAlert("🔴 Warning: Win Rate Below Threshold", 1);
+        }
+        
+        // 📊 Risk Management Alerts
+        double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double drawdown = (1 - equity/balance) * 100;
+        
+        if(drawdown > 5)
+        {
+            SendAlert(StringFormat("⚠️ Drawdown Alert: %.1f%%", drawdown), 1);
+        }
+        
+        // 🎭 Pattern Recognition Alerts
+        if(IsKeyLevelApproaching())
+        {
+            SendAlert("🎯 Approaching Key Level!", 2);
+        }
+    }
+    
+private:
+    void SendAlert(string message, int priority)
+    {
+        if(priority == 1)  // High Priority
+        {
+            Alert(message);
+            SendNotification(message);  // Mobile notification
+        }
+        else if(priority == 2)  // Medium Priority
+        {
+            Alert(message);
+        }
+        else  // Low Priority
+        {
+            Print(message);
+        }
+    }
+    
+    bool IsKeyLevelApproaching()
+    {
+        double bb_upper[], bb_lower[];
+        ArraySetAsSeries(bb_upper, true);
+        ArraySetAsSeries(bb_lower, true);
+        
+        CopyBuffer(handleBB, 0, 0, 1, bb_upper);
+        CopyBuffer(handleBB, 2, 0, 1, bb_lower);
+        
+        double price = SymbolInfoDouble(currentSymbol, SYMBOL_BID);
+        double distance = MathMin(MathAbs(price - bb_upper[0]), 
+                                MathAbs(price - bb_lower[0]));
+                                
+        return distance < g_marketState.atr * 0.2;
+    }
+};
+//+------------------------------------------------------------------+
+//| 📊 Performance Analytics Dashboard                                |
+//+------------------------------------------------------------------+
+class CPerformanceAnalytics
+{
+private:
+    struct DailyStats
+    {
+        double profit;
+        double maxDrawdown;
+        int totalTrades;
+        int winningTrades;
+        double winRate;
+        double profitFactor;
+        double averageWin;
+        double averageLoss;
+        datetime lastUpdate;
+    };
+    
+    DailyStats dailyStats;
+    
+public:
+    void Initialize()
+    {
+        ZeroMemory(dailyStats);
+        dailyStats.lastUpdate = TimeCurrent();
+    }
+    
+    void UpdateStats()
+    {
+        if(IsNewDay())
+        {
+            // Reset daily stats
+            ZeroMemory(dailyStats);
+        }
+        
+        HistorySelect(0, TimeCurrent());
+        
+        for(int i = HistoryDealsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = HistoryDealGetTicket(i);
+            if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != MagicNumber) continue;
+            
+            double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+            if(profit > 0) 
+            {
+                dailyStats.winningTrades++;
+                dailyStats.averageWin = (dailyStats.averageWin * (dailyStats.winningTrades-1) + profit) 
+                                      / dailyStats.winningTrades;
+            }
+            else if(profit < 0)
+            {
+                dailyStats.averageLoss = (dailyStats.averageLoss * (dailyStats.totalTrades - dailyStats.winningTrades) 
+                                       + MathAbs(profit)) 
+                                       / (dailyStats.totalTrades - dailyStats.winningTrades + 1);
+            }
+            
+            dailyStats.profit += profit;
+            dailyStats.totalTrades++;
+        }
+        
+        if(dailyStats.totalTrades > 0)
+        {
+            dailyStats.winRate = (double)dailyStats.winningTrades / dailyStats.totalTrades * 100;
+            dailyStats.profitFactor = (dailyStats.averageWin * dailyStats.winningTrades) / 
+                                    (MathAbs(dailyStats.averageLoss) * (dailyStats.totalTrades - dailyStats.winningTrades));
+        }
+        
+        ShowDashboard();
+    }
+    
+private:
+    void ShowDashboard()
+    {
+        string dashText = "🎯 BLAZZING DUET PERFORMANCE 📊\n";
+        dashText += "--------------------------------\n";
+        dashText += StringFormat("Daily Profit: %.2f\n", dailyStats.profit);
+        dashText += StringFormat("Win Rate: %.1f%%\n", dailyStats.winRate);
+        dashText += StringFormat("Profit Factor: %.2f\n", dailyStats.profitFactor);
+        dashText += StringFormat("Total Trades: %d\n", dailyStats.totalTrades);
+        dashText += "--------------------------------\n";
+        dashText += StringFormat("Avg Win: %.2f | Avg Loss: %.2f\n", 
+                               dailyStats.averageWin, MathAbs(dailyStats.averageLoss));
+                               
+        Comment(dashText);
+    }
+    
+    bool IsNewDay()
+    {
+        static datetime lastDay = 0;
+        datetime currentDay = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
+        
+        if(currentDay > lastDay)
+        {
+            lastDay = currentDay;
+            return true;
+        }
+        return false;
+    }
+};
+
+//+------------------------------------------------------------------+
+//| 🔔 Smart Alert System                                            |
+//+------------------------------------------------------------------+
+class CSmartAlerts
+{
+private:
+    struct AlertCondition
+    {
+        bool isTriggered;
+        datetime lastAlert;
+        int priority;  // 1-High, 2-Medium, 3-Low
+        string message;
+    };
+    
+    AlertCondition alerts[];
+    
+public:
+    void Initialize()
+    {
+        ArrayResize(alerts, 5);
+        for(int i = 0; i < ArraySize(alerts); i++)
+        {
+            alerts[i].isTriggered = false;
+            alerts[i].lastAlert = 0;
+            alerts[i].priority = 3;
+        }
+    }
+    
+    void CheckAlerts()
+    {
+        // 🎯 Market Condition Alerts
+        if(g_marketState.isVolatile && !alerts[0].isTriggered)
+        {
+            SendAlert("⚠️ High Volatility Detected!", 1);
+            alerts[0].isTriggered = true;
+        }
+        
+        // 💫 Performance Alerts
+        if(dailyStats.winRate < 40 && dailyStats.totalTrades > 5)
+        {
+            SendAlert("🔴 Warning: Win Rate Below Threshold", 1);
+        }
+        
+        // 📊 Risk Management Alerts
+        double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double drawdown = (1 - equity/balance) * 100;
+        
+        if(drawdown > 5)
+        {
+            SendAlert(StringFormat("⚠️ Drawdown Alert: %.1f%%", drawdown), 1);
+        }
+        
+        // 🎭 Pattern Recognition Alerts
+        if(IsKeyLevelApproaching())
+        {
+            SendAlert("🎯 Approaching Key Level!", 2);
+        }
+    }
+    
+private:
+    void SendAlert(string message, int priority)
+    {
+        if(priority == 1)  // High Priority
+        {
+            Alert(message);
+            SendNotification(message);  // Mobile notification
+        }
+        else if(priority == 2)  // Medium Priority
+        {
+            Alert(message);
+        }
+        else  // Low Priority
+        {
+            Print(message);
+        }
+    }
+    
+    bool IsKeyLevelApproaching()
+    {
+        double bb_upper[], bb_lower[];
+        ArraySetAsSeries(bb_upper, true);
+        ArraySetAsSeries(bb_lower, true);
+        
+        CopyBuffer(handleBB, 0, 0, 1, bb_upper);
+        CopyBuffer(handleBB, 2, 0, 1, bb_lower);
+        
+        double price = SymbolInfoDouble(currentSymbol, SYMBOL_BID);
+        double distance = MathMin(MathAbs(price - bb_upper[0]), 
+                                MathAbs(price - bb_lower[0]));
+                                
+        return distance < g_marketState.atr * 0.2;
+    }
+};
+//+------------------------------------------------------------------+
+//| 📊 Performance Analytics Dashboard                                |
+//+------------------------------------------------------------------+
+class CPerformanceAnalytics
+{
+private:
+    struct DailyStats
+    {
+        double profit;
+        double maxDrawdown;
+        int totalTrades;
+        int winningTrades;
+        double winRate;
+        double profitFactor;
+        double averageWin;
+        double averageLoss;
+        datetime lastUpdate;
+    };
+    
+    DailyStats dailyStats;
+    
+public:
+    void Initialize()
+    {
+        ZeroMemory(dailyStats);
+        dailyStats.lastUpdate = TimeCurrent();
+    }
+    
+    void UpdateStats()
+    {
+        if(IsNewDay())
+        {
+            // Reset daily stats
+            ZeroMemory(dailyStats);
+        }
+        
+        HistorySelect(0, TimeCurrent());
+        
+        for(int i = HistoryDealsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = HistoryDealGetTicket(i);
+            if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != MagicNumber) continue;
+            
+            double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+            if(profit > 0) 
+            {
+                dailyStats.winningTrades++;
+                dailyStats.averageWin = (dailyStats.averageWin * (dailyStats.winningTrades-1) + profit) 
+                                      / dailyStats.winningTrades;
+            }
+            else if(profit < 0)
+            {
+                dailyStats.averageLoss = (dailyStats.averageLoss * (dailyStats.totalTrades - dailyStats.winningTrades) 
+                                       + MathAbs(profit)) 
+                                       / (dailyStats.totalTrades - dailyStats.winningTrades + 1);
+            }
+            
+            dailyStats.profit += profit;
+            dailyStats.totalTrades++;
+        }
+        
+        if(dailyStats.totalTrades > 0)
+        {
+            dailyStats.winRate = (double)dailyStats.winningTrades / dailyStats.totalTrades * 100;
+            dailyStats.profitFactor = (dailyStats.averageWin * dailyStats.winningTrades) / 
+                                    (MathAbs(dailyStats.averageLoss) * (dailyStats.totalTrades - dailyStats.winningTrades));
+        }
+        
+        ShowDashboard();
+    }
+    
+private:
+    void ShowDashboard()
+    {
+        string dashText = "🎯 BLAZZING DUET PERFORMANCE 📊\n";
+        dashText += "--------------------------------\n";
+        dashText += StringFormat("Daily Profit: %.2f\n", dailyStats.profit);
+        dashText += StringFormat("Win Rate: %.1f%%\n", dailyStats.winRate);
+        dashText += StringFormat("Profit Factor: %.2f\n", dailyStats.profitFactor);
+        dashText += StringFormat("Total Trades: %d\n", dailyStats.totalTrades);
+        dashText += "--------------------------------\n";
+        dashText += StringFormat("Avg Win: %.2f | Avg Loss: %.2f\n", 
+                               dailyStats.averageWin, MathAbs(dailyStats.averageLoss));
+                               
+        Comment(dashText);
+    }
+    
+    bool IsNewDay()
+    {
+        static datetime lastDay = 0;
+        datetime currentDay = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
+        
+        if(currentDay > lastDay)
+        {
+            lastDay = currentDay;
+            return true;
+        }
+        return false;
+    }
+};
+
+//+------------------------------------------------------------------+
+//| 🔔 Smart Alert System                                            |
+//+------------------------------------------------------------------+
+class CSmartAlerts
+{
+private:
+    struct AlertCondition
+    {
+        bool isTriggered;
+        datetime lastAlert;
+        int priority;  // 1-High, 2-Medium, 3-Low
+        string message;
+    };
+    
+    AlertCondition alerts[];
+    
+public:
+    void Initialize()
+    {
+        ArrayResize(alerts, 5);
+        for(int i = 0; i < ArraySize(alerts); i++)
+        {
+            alerts[i].isTriggered = false;
+            alerts[i].lastAlert = 0;
+            alerts[i].priority = 3;
+        }
+    }
+    
+    void CheckAlerts()
+    {
+        // 🎯 Market Condition Alerts
+        if(g_marketState.isVolatile && !alerts[0].isTriggered)
+        {
+            SendAlert("⚠️ High Volatility Detected!", 1);
+            alerts[0].isTriggered = true;
+        }
+        
+        // 💫 Performance Alerts
+        if(dailyStats.winRate < 40 && dailyStats.totalTrades > 5)
+        {
+            SendAlert("🔴 Warning: Win Rate Below Threshold", 1);
+        }
+        
+        // 📊 Risk Management Alerts
+        double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double drawdown = (1 - equity/balance) * 100;
+        
+        if(drawdown > 5)
+        {
+            SendAlert(StringFormat("⚠️ Drawdown Alert: %.1f%%", drawdown), 1);
+        }
+        
+        // 🎭 Pattern Recognition Alerts
+        if(IsKeyLevelApproaching())
+        {
+            SendAlert("🎯 Approaching Key Level!", 2);
+        }
+    }
+    
+private:
+    void SendAlert(string message, int priority)
+    {
+        if(priority == 1)  // High Priority
+        {
+            Alert(message);
+            SendNotification(message);  // Mobile notification
+        }
+        else if(priority == 2)  // Medium Priority
+        {
+            Alert(message);
+        }
+        else  // Low Priority
+        {
+            Print(message);
+        }
+    }
+    
+    bool IsKeyLevelApproaching()
+    {
+        double bb_upper[], bb_lower[];
+        ArraySetAsSeries(bb_upper, true);
+        ArraySetAsSeries(bb_lower, true);
+        
+        CopyBuffer(handleBB, 0, 0, 1, bb_upper);
+        CopyBuffer(handleBB, 2, 0, 1, bb_lower);
+        
+        double price = SymbolInfoDouble(currentSymbol, SYMBOL_BID);
+        double distance = MathMin(MathAbs(price - bb_upper[0]), 
+                                MathAbs(price - bb_lower[0]));
+                                
+        return distance < g_marketState.atr * 0.2;
+    }
+};
+//+------------------------------------------------------------------+
+//| 🌟 Multi-Asset Correlation Filter                                 |
+//+------------------------------------------------------------------+
+class CCorrelationFilter
+{
+private:
+    struct CorrelationData
+    {
+        string symbol;
+        double correlation;
+        bool isStrong;  // true if |correlation| > 0.7
+        datetime lastUpdate;
+    };
+    
+    CorrelationData correlations[];
+    string watchlist[];  // Pair yang perlu dimonitor
+    
+public:
+    void Initialize()
+    {
+        // Inisialisasi watchlist dengan pair yang berkorelasi
+        string commonPairs[] = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", 
+                              "USDCHF", "NZDUSD", "USDCAD", "XAUUSD"};
+        
+        ArrayResize(watchlist, ArraySize(commonPairs));
+        ArrayCopy(watchlist, commonPairs);
+        
+        ArrayResize(correlations, ArraySize(watchlist));
+        UpdateCorrelations();
+    }
+    
+    bool IsSafeToTrade()
+    {
+        UpdateCorrelations();
+        
+        int strongCorrelations = 0;
+        bool hasConflictingSignal = false;
+        
+        // Check correlation conflicts
+        for(int i = 0; i < ArraySize(correlations); i++)
+        {
+            if(correlations[i].isStrong)
+            {
+                strongCorrelations++;
+                
+                // Check if correlated pair is moving in opposite direction
+                if(IsConflictingMovement(correlations[i].symbol, 
+                   correlations[i].correlation))
+                {
+                    hasConflictingSignal = true;
+                    break;
+                }
+            }
+        }
+        
+        // 🎯 Trading Safety Rules:
+        // 1. Tidak trade jika terlalu banyak korelasi kuat (>3)
+        // 2. Tidak trade jika ada konflik sinyal dengan pair berkorelasi
+        return (strongCorrelations <= 3 && !hasConflictingSignal);
+    }
+    
+    string GetCorrelationReport()
+    {
+        string report = "\n🌟 CORRELATION ANALYSIS 🌟\n";
+        report += "------------------------\n";
+        
+        for(int i = 0; i < ArraySize(correlations); i++)
+        {
+            if(correlations[i].isStrong)
+            {
+                report += StringFormat("%s: %.2f %s\n", 
+                                     correlations[i].symbol,
+                                     correlations[i].correlation,
+                                     GetCorrelationEmoji(correlations[i].correlation));
+            }
+        }
+        
+        return report;
+    }
+    
+private:
+    void UpdateCorrelations()
+    {
+        for(int i = 0; i < ArraySize(watchlist); i++)
+        {
+            if(TimeCurrent() - correlations[i].lastUpdate < 300) continue; // Update every 5 min
+            
+            correlations[i].symbol = watchlist[i];
+            correlations[i].correlation = CalculateCorrelation(watchlist[i]);
+            correlations[i].isStrong = MathAbs(correlations[i].correlation) > 0.7;
+            correlations[i].lastUpdate = TimeCurrent();
+        }
+    }
+    
+    double CalculateCorrelation(string symbol2)
+    {
+        int period = 20;  // Correlation period
+        double price1[], price2[];
+        ArrayResize(price1, period);
+        ArrayResize(price2, period);
+        
+        // Get price data
+        for(int i = 0; i < period; i++)
+        {
+            price1[i] = iClose(currentSymbol, PERIOD_H1, i);
+            price2[i] = iClose(symbol2, PERIOD_H1, i);
+        }
+        
+        return CalculatePearsonCorrelation(price1, price2, period);
+    }
+    
+    double CalculatePearsonCorrelation(double &x[], double &y[], int period)
+    {
+        double sumX = 0, sumY = 0, sumXY = 0;
+        double sumX2 = 0, sumY2 = 0;
+        
+        for(int i = 0; i < period; i++)
+        {
+            sumX += x[i];
+            sumY += y[i];
+            sumXY += x[i] * y[i];
+            sumX2 += x[i] * x[i];
+            sumY2 += y[i] * y[i];
+        }
+        
+        double correlation = (period * sumXY - sumX * sumY) / 
+                           (MathSqrt((period * sumX2 - sumX * sumX) * 
+                            (period * sumY2 - sumY * sumY)));
+                            
+        return correlation;
+    }
+    
+    string GetCorrelationEmoji(double correlation)
+    {
+        if(correlation > 0.9) return "🟢";      // Strong positive
+        if(correlation > 0.7) return "🟡";      // Moderate positive
+        if(correlation < -0.9) return "🔴";     // Strong negative
+        if(correlation < -0.7) return "🟠";     // Moderate negative
+        return "⚪";                            // Weak correlation
+    }
+    
+    bool IsConflictingMovement(string symbol2, double correlation)
+    {
+        double mainTrend = CalculateTrend(currentSymbol);
+        double corrTrend = CalculateTrend(symbol2);
+        
+        // Jika korelasi positif, tren harus sama
+        // Jika korelasi negatif, tren harus berlawanan
+        return ((correlation > 0 && mainTrend * corrTrend < 0) ||
+                (correlation < 0 && mainTrend * corrTrend > 0));
+    }
+    
+    double CalculateTrend(string symbol)
+    {
+        double ma[];
+        ArraySetAsSeries(ma, true);
+        int maHandle = iMA(symbol, PERIOD_H1, 20, 0, MODE_EMA, PRICE_CLOSE);
+        CopyBuffer(maHandle, 0, 0, 2, ma);
+        IndicatorRelease(maHandle);
+        
+        return ma[0] - ma[1];
+    }
+};
