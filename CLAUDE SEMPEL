@@ -8,7 +8,7 @@ extern int MagicNumber = 41188;
 extern int StopLoss = 14;
 double MinLots = 0.01;
 double MaxLots = 1000.0;
-extern int Risk = 180;
+extern double RiskPercent = 2.0; // Risk per trade as a percentage of current balance
 double FixedLots = 0.1;
 bool MM = TRUE;
 extern double MaxSpread = 10.0;
@@ -274,7 +274,8 @@ double Lot() {
    double LotStep = NormalizeDouble(MarketInfo(Symbol(), MODE_LOTSTEP), 2);
    if (LotStep == 0.01) LotDigits = 2;
    else LotDigits = 1;
-   if (MM) LotSize = NormalizeDouble(AccountFreeMargin() * Risk / 10000.0 / (vLeverage / 100), LotDigits);
+   double Risk = AccountBalance() * RiskPercent / 100.0; // Calculate risk based on current balance
+   if (MM) LotSize = NormalizeDouble(Risk / (StopLoss * Point), LotDigits);
    else LotSize = MinLot;
    double Sym_MinLot = NormalizeDouble(MarketInfo(Symbol(), MODE_MINLOT), 2);
    double Sym_MaxLot = NormalizeDouble(MarketInfo(Symbol(), MODE_MAXLOT), 2);
@@ -293,7 +294,7 @@ void fDisplayInfo() {
          "\n :: Server                           : ", AccountServer(),
          "\n :: Account Name /Number   : ", AccountName(), "/ ", AccountNumber(),
          "\n :: Leverage                        : 1 : ", AccountLeverage(),
-         "\n :: Risk Setting                    : ", Risk, 
+         "\n :: Risk Setting                    : ", RiskPercent, "%", 
          "\n :: Lots                              : ", DoubleToStr(Lot(), 2), 
          "\n :: EA Setting                     : ", EACmt,
          "\n --------------------------------------------------------------------------",
@@ -306,7 +307,7 @@ void fDisplayInfo() {
          "\n :: Server                           : ", AccountServer(),
          "\n :: Account Name /Number   : ", AccountName(), "/ ", AccountNumber(),
          "\n :: Leverage                        : 1 : ", AccountLeverage(),
-         "\n :: Risk Setting                    : ", Risk, 
+         "\n :: Risk Setting                    : ", RiskPercent, "%", 
          "\n :: Lots                              : ", DoubleToStr(Lot(), 2),
          "\n :: EA Setting                     : ", EACmt,
          "\n",
@@ -320,7 +321,7 @@ void fDisplayInfo() {
          "\n :: Server                           : ", AccountServer(),
          "\n :: Account Name /Number   : ", AccountName(), "/ ", AccountNumber(),
          "\n :: Leverage                        : 1 : ", AccountLeverage(),
-         "\n :: Risk Setting                    : ", Risk, 
+         "\n :: Risk Setting                    : ", RiskPercent, "%", 
          "\n :: Lots                              : ", DoubleToStr(Lot(), 2),
          "\n :: EA Setting                     : ", EACmt,
          "\n",
