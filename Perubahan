@@ -1,755 +1,776 @@
 //+------------------------------------------------------------------+
-//|                                               SakhaBreak_V3.mq5  |
-//|                            Copyright 2025, Margin Call 2 (Updated)|
-//|                                    https://github.com/margincall2|
+//| Sakha Property with Advanced Protection System                     |
 //+------------------------------------------------------------------+
-#property copyright "Copyright 2025, Margin Call 2"
-#property link      "https://github.com/margincall2"
-#property version   "3.02"
+#property copyright "Copyright 2025, Sakha"
+#property link      "https://shopee.co.id/algotrade"
+#property version   "3.00"
 #property strict
-#property description "Enhanced Trading EA with Advanced Debug Display"
 
-// Trading Mode Enumeration
-enum TRADING_MODE
+// Cache frequently used string constant
+#define ORDER_COMMENT_CONST "SakhaBreak_DC"
+
+//+------------------------------------------------------------------+
+//| Forward Declarations                                              |
+//+------------------------------------------------------------------+
+// Function declarations to avoid compile errors
+bool ModifyPositionSl(const ulong ticket, const double newSl);
+void HandleSmartTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
+                        const double currentPrice, const double currentSl,
+                        const double pointsProfit);
+void HandleRegularTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
+                          const double currentPrice, const double currentSl);
+void CancelAllPending();
+bool ClosePosition(const ulong ticket);
+double CalculateVolatility();
+
+//+------------------------------------------------------------------+
+//| Structures Definition                                             |
+//+------------------------------------------------------------------+
+struct DonchianLevels 
 {
-   MODE_REGULAR = 0,    // Regular Trading
-   MODE_RECOVERY = 1    // Recovery Mode
+    double upperBand;
+    double lowerBand;
 };
 
-//--- Input Parameters - Trading Settings
-input string          InpHeader1         = "------- Trading Settings -------"; // Trading Settings
-input TRADING_MODE    InpTradingMode     = MODE_REGULAR;                      // Trading Mode
-input double         InpRiskPercent     = 1.0;                              // Risk Percent (%)
-input double         InpFixedLotSize    = 0.1;                              // Fixed Lot Size
-input bool           InpUseRiskPercent  = true;                             // Use Risk-Based Lots
-input int            InpStopLoss        = 50;                               // Stop Loss (points)
-input int            InpTakeProfit      = 100;                              // Take Profit (points)
-input int            InpTrailingStop    = 20;                               // Trailing Stop (points)
-input int            InpBreakEven       = 10;                               // Break Even (points)
-input bool           InpHiddenSLTP      = false;                            // Use Hidden SL/TP
-
-//--- Input Parameters - Risk Management
-input string          InpHeader2         = "------- Risk Management -------"; // Risk Settings
-input int            InpMaxSpread       = 20;                               // Maximum Spread (points)
-input int            InpMaxOrders       = 1;                                // Maximum Open Orders
-input double         InpMaxDailyLoss    = 100.0;                           // Maximum Daily Loss ($)
-input double         InpMaxDailyProfit  = 200.0;                           // Maximum Daily Profit ($)
-input ulong          InpMagicNumber     = 123456;                          // Magic Number
-
-//--- Input Parameters - Display Settings
-input string          InpHeader3         = "------- Display Settings -------"; // Display Settings
-input int            InpInitialFontSize = 10;                               // Initial Font Size (8-40)
-input color          InpLabelColor      = clrWhite;                         // Label Color
-input color          InpValueColor      = clrLightGreen;                    // Value Color
-input string         InpFontName        = "Arial";                          // Font Name
-input int            InpXOffset         = 20;                               // X Position
-input int            InpYOffset         = 20;                               // Y Position
-
-//--- Trading Statistics Structure
-struct TRADING_STATS
+struct HiddenLevels 
 {
-   double      dailyProfit;
-   double      dailyLoss;
-   datetime    lastResetDay;
-   int         totalTrades;
-   double      currentSpread;
-   double      riskAmount;
-   double      calculatedLot;
-   int         pingServer;
+    double realSL;
+    double realTP;
+    double fakeSL;
+    double fakeTP;
 };
 
-//--- Global Variables
-TRADING_STATS    gStats;
-bool             gIsTradeAllowed = true;
-datetime         gLastBarTime = 0;
-string           gDebugLabels[];
-int              gCurrentFontSize;
+struct TrailingState 
+{
+    bool isTrailingActive;
+    double lastTrailingLevel;
+    double highestProfit;
+    double lowestProfit;
+    datetime lastUpdate;
+    double volatilityFactor;
+    HiddenLevels levels;
+};
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                   |
+//| Global Variables and Objects                                      |
 //+------------------------------------------------------------------+
-int OnInit()
+// Trading objects
+MqlTradeRequest   request;
+MqlTradeResult    result;
+static TrailingState trailingStates[];
+static DonchianLevels g_donchian;
+
+// Cached values
+static datetime lastBarTime = 0;
+static double currentHigh = 0.0;
+static double currentLow = 0.0;
+static double tickValue = 0.0;
+static double minLot = 0.0;
+static double maxLot = 0.0;
+static string currentSymbol = "";
+static double pointValue = 0.0;
+static double commissionPerLot = 0.0;
+
+//+------------------------------------------------------------------+
+//| Input Parameters                                                  |
+//+------------------------------------------------------------------+
+// Trading Parameters
+input group "Basic Trading Settings"
+input ulong   MagicNumber = 123456;          // Magic Number
+input double  LotSize = 0.1;                 // Lot Size (Initial)
+input double  RiskPercent = 1.0;             // Risk per trade (%)
+input string  OrderComment = ORDER_COMMENT_CONST; // Order Comment
+input double  Commission = 3.0;              // Commission per trade
+
+// Risk Management Parameters
+input group "Risk Management"
+input int     StopLoss = 50;                 // Stop Loss (points)
+input int     TakeProfit = 100;              // Take Profit (points)
+input int     TrailingStop = 20;             // Trailing Stop (points)
+input int     BreakEven = 10;                // Break Even (points)
+input int     MaxSpread = 10;                // Max Allowed Spread
+input int     MaxPositions = 1;              // Maximum Positions Allowed
+input bool    UseATRFilter = true;           // Use ATR Filter
+input int     ATRPeriod = 14;               // ATR Period
+input double  ATRMultiplier = 1.5;          // ATR Multiplier
+
+// Virtual Protection Settings
+input group "Virtual Protection Settings"
+input bool    UseVirtualSLTP = true;         // Gunakan Virtual SL/TP
+input int     VirtualDistance = 30;          // Jarak Virtual SL/TP (points)
+input bool    UseRandomOffset = true;        // Gunakan Random Offset
+input int     MaxRandomPoints = 5;           // Maksimum Random Points
+input bool    UseHiddenTP = true;           // Hide Take Profit Level
+input bool    UseHiddenSL = true;           // Hide Stop Loss Level
+
+// Smart Trailing Settings
+input group "Smart Trailing Settings"
+input bool    UseSmartTrailing = true;       // Gunakan Smart Trailing
+input bool    UseVolatilityTrailing = true;  // Trailing berdasar Volatilitas
+input int     TrailingStartPoints = 50;      // Jarak Profit sebelum Trailing
+input double  TrailingRatio = 2.0;           // Rasio Trailing
+input int     MinimumTrailingStep = 5;       // Minimum Trailing Step
+input double  VolatilityMultiplier = 1.0;    // Volatility Multiplier
+
+// Timeframe Settings
+input group "Timeframe Settings"
+input ENUM_TIMEFRAMES Timeframe = PERIOD_CURRENT;      // Trading Timeframe
+input ENUM_TIMEFRAMES DonchianTimeframe = PERIOD_W1;   // Donchian Timeframe
+input int             DonchianPeriod = 20;            // Donchian Period
+input bool           UseMultiTimeframe = false;       // Use Multi Timeframe Analysis
+//+------------------------------------------------------------------+
+//| Order Management Functions                                        |
+//+------------------------------------------------------------------+
+bool PlacePendingOrder(const ENUM_ORDER_TYPE type, const double price)
 {
-   // Initialize font size within valid range
-   gCurrentFontSize = MathMax(8, MathMin(40, InpInitialFontSize));
-   
-   // Initialize statistics
-   ResetDailyStats();
-   
-   // Create displays
-   CreateDebugDisplay();
-   CreateFontSizeControls();
-   
-   // Validate inputs
-   if(!ValidateInputs())
-      return INIT_PARAMETERS_INCORRECT;
-      
-   Print("SakhaBreak V3 initialized successfully");
-   return(INIT_SUCCEEDED);
+    HiddenLevels levels = CalculateHiddenLevels(price, type);
+    
+    ZeroMemory(request);
+    ZeroMemory(result);
+
+    request.action = TRADE_ACTION_PENDING;
+    request.symbol = currentSymbol;
+    request.volume = CalculateLotSize();
+    request.type = type;
+    request.price = price;
+    request.sl = levels.fakeSL;
+    request.tp = levels.fakeTP;
+    request.deviation = 5;
+    request.magic = MagicNumber;
+    request.comment = OrderComment;
+
+    if(!OrderSend(request, result)) return false;
+    
+    trailingStates[result.order].levels = levels;
+    return true;
+}
+
+void ManagePendingOrders(const DonchianLevels &donchian)
+{
+    const double effectiveUpperBand = donchian.upperBand + commissionPerLot * pointValue;
+    const double effectiveLowerBand = donchian.lowerBand - commissionPerLot * pointValue;
+    const double bodyHigh = MathMax(iOpen(currentSymbol, Timeframe, 1), iClose(currentSymbol, Timeframe, 1));
+    const double bodyLow = MathMin(iOpen(currentSymbol, Timeframe, 1), iClose(currentSymbol, Timeframe, 1));
+
+    bool buyStopExists = false, sellStopExists = false;
+    ulong buyTicket = 0, sellTicket = 0;
+
+    for(int i = OrdersTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(OrderSelect(ticket) && OrderGetInteger(ORDER_MAGIC) == MagicNumber)
+        {
+            ENUM_ORDER_TYPE type = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+            if(type == ORDER_TYPE_BUY_STOP)
+            {
+                buyStopExists = true;
+                buyTicket = ticket;
+            }
+            else if(type == ORDER_TYPE_SELL_STOP)
+            {
+                sellStopExists = true;
+                sellTicket = ticket;
+            }
+        }
+    }
+
+    // Place or modify orders based on conditions
+    if(currentHigh > effectiveUpperBand)
+    {
+        if(!buyStopExists) PlacePendingOrder(ORDER_TYPE_BUY_STOP, bodyHigh);
+        if(!sellStopExists) PlacePendingOrder(ORDER_TYPE_SELL_STOP, bodyLow);
+    }
+    else if(currentLow < effectiveLowerBand)
+    {
+        if(!sellStopExists) PlacePendingOrder(ORDER_TYPE_SELL_STOP, bodyLow);
+        if(!buyStopExists) PlacePendingOrder(ORDER_TYPE_BUY_STOP, bodyHigh);
+    }
+    else
+    {
+        CancelAllPending();
+    }
 }
 
 //+------------------------------------------------------------------+
-//| Expert deinitialization function                                 |
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-   DeleteDebugDisplay();
-   DeleteFontControls();
-   Print("SakhaBreak V3 deinitialized, reason code: ", reason);
-}
-
-//+------------------------------------------------------------------+
-//| Expert tick function                                             |
-//+------------------------------------------------------------------+
-void OnTick()
-{
-   // Update debug information
-   UpdateDebugInfo();
-   
-   // Check daily reset
-   CheckDailyReset();
-   
-   // Process trading if allowed
-   if(IsTradeAllowed())
-   {
-      // Manage existing positions first
-      ManageOpenPositions();
-      
-      // Check for new trading opportunities on new bar
-      if(IsNewBar())
-      {
-         ProcessTrading();
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Chart event handler                                              |
-//+------------------------------------------------------------------+
-void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
-{
-   if(id == CHARTEVENT_OBJECT_CLICK)
-   {
-      // Handle font size buttons
-      if(sparam == "BtnIncrease" && gCurrentFontSize < 40)
-      {
-         gCurrentFontSize++;
-         UpdateFontSize();
-      }
-      else if(sparam == "BtnDecrease" && gCurrentFontSize > 8)
-      {
-         gCurrentFontSize--;
-         UpdateFontSize();
-      }
-      
-      // Update size display
-      ObjectSetString(0, "FontSize", OBJPROP_TEXT, 
-                     "Size: " + IntegerToString(gCurrentFontSize));
-      
-      ChartRedraw();
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Process trading logic                                            |
-//+------------------------------------------------------------------+
-void ProcessTrading()
-{
-   if(PositionsTotal() >= InpMaxOrders) return;
-   
-   double currentClose = iClose(_Symbol, PERIOD_CURRENT, 0);
-   double previousClose = iClose(_Symbol, PERIOD_CURRENT, 1);
-   double twoClosesAgo = iClose(_Symbol, PERIOD_CURRENT, 2);
-   
-   bool hasOpenPosition = false;
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong ticket = PositionGetTicket(i);
-      if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
-         PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
-      {
-         hasOpenPosition = true;
-         break;
-      }
-   }
-   
-   if(!hasOpenPosition)
-   {
-      if(currentClose > previousClose && previousClose > twoClosesAgo)
-      {
-         double sl = InpHiddenSLTP ? 0 : SymbolInfoDouble(_Symbol, SYMBOL_ASK) - InpStopLoss * _Point;
-         double tp = InpHiddenSLTP ? 0 : SymbolInfoDouble(_Symbol, SYMBOL_ASK) + InpTakeProfit * _Point;
-         OpenOrder(ORDER_TYPE_BUY, sl, tp);
-      }
-      else if(currentClose < previousClose && previousClose < twoClosesAgo)
-      {
-         double sl = InpHiddenSLTP ? 0 : SymbolInfoDouble(_Symbol, SYMBOL_BID) + InpStopLoss * _Point;
-         double tp = InpHiddenSLTP ? 0 : SymbolInfoDouble(_Symbol, SYMBOL_BID) - InpTakeProfit * _Point;
-         OpenOrder(ORDER_TYPE_SELL, sl, tp);
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Manage open positions                                            |
+//| Position Management Functions                                      |
 //+------------------------------------------------------------------+
 void ManageOpenPositions()
 {
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket <= 0) continue;
-      
-      if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
-         PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
-      {
-         if(InpTrailingStop > 0)
-         {
-            HandleTrailingStop(ticket);
-         }
-         
-         if(InpBreakEven > 0)
-         {
-            CheckBreakEven(ticket);
-         }
-         
-         if(InpHiddenSLTP)
-         {
-            CheckHiddenLevels(ticket);
-         }
-         
-         double positionProfit = PositionGetDouble(POSITION_PROFIT);
-         if(positionProfit > 0)
-         {
-            gStats.dailyProfit = MathMax(gStats.dailyProfit, positionProfit);
-         }
-         else
-         {
-            gStats.dailyLoss = MathMax(gStats.dailyLoss, MathAbs(positionProfit));
-         }
-      }
-   }
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(PositionSelectByTicket(ticket) && 
+           PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        {
+            ManagePosition(ticket);
+        }
+    }
 }
 
-//+------------------------------------------------------------------+
-//| Open new order                                                   |
-//+------------------------------------------------------------------+
-bool OpenOrder(ENUM_ORDER_TYPE orderType, double sl, double tp)
+void ManagePosition(const ulong ticket)
 {
-   if(!SymbolInfoDouble(_Symbol, SYMBOL_ASK) || !SymbolInfoDouble(_Symbol, SYMBOL_BID))
-   {
-      Print("Error: No valid price for ", _Symbol);
-      return false;
-   }
-   
-   double lotSize = gStats.calculatedLot;
-   if(lotSize <= 0)
-   {
-      Print("Error: Invalid lot size");
-      return false;
-   }
-   
-   MqlTradeRequest request = {};
-   MqlTradeResult result = {};
-   
-   request.action = TRADE_ACTION_DEAL;
-   request.symbol = _Symbol;
-   request.volume = lotSize;
-   request.type = orderType;
-   request.price = (orderType == ORDER_TYPE_BUY) ? 
-                   SymbolInfoDouble(_Symbol, SYMBOL_ASK) : 
-                   SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   request.sl = sl;
-   request.tp = tp;
-   request.deviation = 5;
-   request.magic = InpMagicNumber;
-   request.comment = "SakhaBreak V3";
-   
-   if(!OrderSend(request, result))
-   {
-      Print("OrderSend error: ", GetLastError());
-      return false;
-   }
-   
-   if(result.retcode != TRADE_RETCODE_DONE)
-   {
-      Print("OrderSend failed: ", result.retcode);
-      return false;
-   }
-   
-   gStats.totalTrades++;
-   return true;
+    if(!PositionSelectByTicket(ticket)) return;
+
+    ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+    double currentPrice = (type == POSITION_TYPE_BUY) ? 
+                         SymbolInfoDouble(currentSymbol, SYMBOL_BID) :
+                         SymbolInfoDouble(currentSymbol, SYMBOL_ASK);
+    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+    double currentSl = PositionGetDouble(POSITION_SL);
+    
+    // Check Virtual SL/TP
+    if(UseVirtualSLTP)
+    {
+        HiddenLevels levels = trailingStates[ticket].levels;
+        if((type == POSITION_TYPE_BUY && currentPrice <= levels.realSL) ||
+           (type == POSITION_TYPE_SELL && currentPrice >= levels.realSL))
+        {
+            ClosePosition(ticket);
+            return;
+        }
+        
+        if((type == POSITION_TYPE_BUY && currentPrice >= levels.realTP) ||
+           (type == POSITION_TYPE_SELL && currentPrice <= levels.realTP))
+        {
+            ClosePosition(ticket);
+            return;
+        }
+    }
+
+    double pointsProfit = (MathAbs(currentPrice - openPrice) / pointValue) - commissionPerLot;
+    bool isAtBreakeven = (type == POSITION_TYPE_BUY && currentSl >= openPrice) ||
+                        (type == POSITION_TYPE_SELL && currentSl <= openPrice);
+
+    // Break Even Logic
+    if(!isAtBreakeven && pointsProfit >= BreakEven)
+    {
+        double newSl = openPrice + (type == POSITION_TYPE_BUY ?
+                      (1 + commissionPerLot) * pointValue :
+                      (-1 - commissionPerLot) * pointValue);
+                      
+        if(UseVirtualSLTP)
+        {
+            trailingStates[ticket].levels.realSL = newSl;
+            newSl = (type == POSITION_TYPE_BUY) ?
+                    newSl - VirtualDistance * pointValue :
+                    newSl + VirtualDistance * pointValue;
+        }
+        
+        if(ModifyPositionSl(ticket, newSl))
+        {
+            if(UseSmartTrailing)
+            {
+                trailingStates[ticket].isTrailingActive = false;
+                trailingStates[ticket].lastTrailingLevel = 0.0;
+            }
+            return;
+        }
+    }
+
+    // Trailing Logic
+    if(isAtBreakeven && pointsProfit >= TrailingStartPoints)
+    {
+        if(UseSmartTrailing)
+            HandleSmartTrailing(ticket, type, currentPrice, currentSl, pointsProfit);
+        else
+            HandleRegularTrailing(ticket, type, currentPrice, currentSl);
+    }
 }
 
 //+------------------------------------------------------------------+
-//| Handle trailing stop                                             |
+//| Trailing Functions                                                |
 //+------------------------------------------------------------------+
-void HandleTrailingStop(ulong ticket)
+double CalculateVolatility()
 {
-   if(!PositionSelectByTicket(ticket)) return;
-   
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
-   double stopLoss = PositionGetDouble(POSITION_SL);
-   
-   if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
-   {
-      double newSL = NormalizeDouble(currentPrice - InpTrailingStop * _Point, _Digits);
-      if(newSL > stopLoss && newSL > openPrice)
-      {
-         ModifyPosition(ticket, newSL, PositionGetDouble(POSITION_TP));
-      }
-   }
-   else if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
-   {
-      double newSL = NormalizeDouble(currentPrice + InpTrailingStop * _Point, _Digits);
-      if((stopLoss == 0 || newSL < stopLoss) && newSL < openPrice)
-      {
-         ModifyPosition(ticket, newSL, PositionGetDouble(POSITION_TP));
-      }
-   }
+    double atr[];
+    ArraySetAsSeries(atr, true);
+    
+    int atrHandle = iATR(currentSymbol, PERIOD_CURRENT, 14);
+    CopyBuffer(atrHandle, 0, 0, 1, atr);
+    
+    double currentATR = atr[0];
+    double averageATR = 0;
+    
+    CopyBuffer(atrHandle, 0, 0, 14, atr);
+    for(int i = 0; i < 14; i++)
+    {
+        averageATR += atr[i];
+    }
+    averageATR /= 14;
+    
+    IndicatorRelease(atrHandle);
+    
+    return currentATR / averageATR;
 }
 
-//+------------------------------------------------------------------+
-//| Check break even                                                 |
-//+------------------------------------------------------------------+
-void CheckBreakEven(ulong ticket)
+void HandleSmartTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
+                        const double currentPrice, const double currentSl,
+                        const double pointsProfit)
 {
-   if(!PositionSelectByTicket(ticket)) return;
-   
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
-   double stopLoss = PositionGetDouble(POSITION_SL);
-   
-   if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
-   {
-      if(currentPrice >= openPrice + InpBreakEven * _Point && 
-         (stopLoss == 0 || stopLoss < openPrice))
-      {
-         ModifyPosition(ticket, openPrice + 2 * _Point, PositionGetDouble(POSITION_TP));
-      }
-   }
-   else if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
-   {
-      if(currentPrice <= openPrice - InpBreakEven * _Point && 
-         (stopLoss == 0 || stopLoss > openPrice))
-      {
-         ModifyPosition(ticket, openPrice - 2 * _Point, PositionGetDouble(POSITION_TP));
-      }
-   }
+    TrailingState state = trailingStates[ticket];
+    
+    if(!state.isTrailingActive)
+    {
+        state.isTrailingActive = true;
+        state.lastTrailingLevel = currentSl;
+        state.highestProfit = pointsProfit;
+        state.lowestProfit = pointsProfit;
+        state.lastUpdate = TimeCurrent();
+        state.volatilityFactor = UseVolatilityTrailing ? CalculateVolatility() : 1.0;
+    }
+
+    state.highestProfit = MathMax(state.highestProfit, pointsProfit);
+    state.lowestProfit = MathMin(state.lowestProfit, pointsProfit);
+
+    double trailingStep = UseVolatilityTrailing ? 
+                         TrailingStop * state.volatilityFactor :
+                         TrailingStop;
+    
+    trailingStep = MathMax(trailingStep, MinimumTrailingStep);
+    double trailingDistance = trailingStep * TrailingRatio;
+
+    double realNewSL = currentPrice - (type == POSITION_TYPE_BUY ?
+                      (trailingDistance + commissionPerLot) * pointValue :
+                      -(trailingDistance + commissionPerLot) * pointValue);
+
+    double fakeNewSL = UseVirtualSLTP ? (type == POSITION_TYPE_BUY ?
+                      realNewSL - VirtualDistance * pointValue :
+                      realNewSL + VirtualDistance * pointValue) : realNewSL;
+
+    if((type == POSITION_TYPE_BUY && realNewSL > state.levels.realSL) ||
+       (type == POSITION_TYPE_SELL && realNewSL < state.levels.realSL))
+    {
+        if(ModifyPositionSl(ticket, fakeNewSL))
+        {
+            state.levels.realSL = realNewSL;
+            state.lastTrailingLevel = fakeNewSL;
+            trailingStates[ticket] = state;
+        }
+    }
+
+    if(UseVolatilityTrailing && TimeCurrent() - state.lastUpdate >= 300)
+    {
+        state.volatilityFactor = CalculateVolatility();
+        state.lastUpdate = TimeCurrent();
+        trailingStates[ticket] = state;
+    }
 }
 
-//+------------------------------------------------------------------+
-//| Modify position                                                  |
-//+------------------------------------------------------------------+
-bool ModifyPosition(ulong ticket, double sl, double tp)
+void HandleRegularTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
+                         const double currentPrice, const double currentSl)
 {
-   if(!PositionSelectByTicket(ticket)) return false;
-   
-   MqlTradeRequest request = {};
-   MqlTradeResult result = {};
-   
-   request.action = TRADE_ACTION_SLTP;
-   request.position = ticket;
-   request.symbol = _Symbol;
-   request.sl = NormalizeDouble(sl, _Digits);
-   request.tp = NormalizeDouble(tp, _Digits);
-   
-   if(!OrderSend(request, result))
-   {
-      Print("ModifyPosition error: ", GetLastError());
-      return false;
-   }
-   
-   if(result.retcode != TRADE_RETCODE_DONE)
-   {
-      Print("ModifyPosition failed: ", result.retcode);
-      return false;
-   }
-   
-   return true;
+    double newSl = currentPrice - (type == POSITION_TYPE_BUY ?
+                   (TrailingStop + commissionPerLot) * pointValue :
+                   -(TrailingStop + commissionPerLot) * pointValue);
+
+    if((type == POSITION_TYPE_BUY && newSl > currentSl) ||
+       (type == POSITION_TYPE_SELL && newSl < currentSl))
+    {
+        ModifyPositionSl(ticket, newSl);
+    }
 }
 
 //+------------------------------------------------------------------+
-//| Check hidden levels                                              |
+//| Utility Functions                                                 |
 //+------------------------------------------------------------------+
-void CheckHiddenLevels(ulong ticket)
+bool ModifyPositionSl(const ulong ticket, const double newSl)
 {
-   if(!PositionSelectByTicket(ticket)) return;
-   
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
-   
-   if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
-   {
-      if(currentPrice <= openPrice - InpStopLoss * _Point)
-      {
-         ClosePosition(ticket);
-      }
-      else if(currentPrice >= openPrice + InpTakeProfit * _Point)
-      {
-         ClosePosition(ticket);
-      }
-   }
-   else if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
-   {
-      if(currentPrice >= openPrice + InpStopLoss * _Point)
-      {
-         ClosePosition(ticket);
-      }
-      else if(currentPrice <= openPrice - InpTakeProfit * _Point)
-      {
-         ClosePosition(ticket);
-      }
-   }
+    if(!PositionSelectByTicket(ticket)) return false;
+
+    ZeroMemory(request);
+    ZeroMemory(result);
+
+    request.action = TRADE_ACTION_SLTP;
+    request.position = ticket;
+    request.symbol = currentSymbol;
+    request.sl = newSl;
+    request.tp = PositionGetDouble(POSITION_TP);
+
+    return OrderSend(request, result);
 }
 
-//+------------------------------------------------------------------+
-//| Close position                                                   |
-//+------------------------------------------------------------------+
-bool ClosePosition(ulong ticket)
-{
-   if(!PositionSelectByTicket(ticket)) return false;
-   
-   MqlTradeRequest request = {};
-   MqlTradeResult result = {};
-   
-   request.action = TRADE_ACTION_DEAL;
-   request.position = ticket;
-   request.symbol = _Symbol;
-   request.volume = PositionGetDouble(POSITION_VOLUME);
-   request.type = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
-   request.price = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? 
-                  SymbolInfoDouble(_Symbol, SYMBOL_BID) : 
-                  SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   request.deviation = 5;
-   request.magic = InpMagicNumber;
-   
-   if(!OrderSend(request, result))
-   {
-      Print("ClosePosition error: ", GetLastError());
-      return false;
-   }
-   
-   if(result.retcode != TRADE_RETCODE_DONE)
-   {
-      Print("ClosePosition failed: ", result.retcode);
-      return false;
-   }
-   
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Create debug display                                             |
-//+------------------------------------------------------------------+
-void CreateDebugDisplay()
-{
-   string labels[] = {
-      "Server Time: ",
-      "Account Number: ",
-      "Account Name: ",
-      "Balance: ",
-      "Equity: ",
-      "Risk %: ",
-      "Risk Amount ($): ",
-      "Calculated Lot: ",
-      "Current Spread: ",
-      "Total Trades: ",
-      "Server Ping: ",
-      "Daily P/L: "
-   };
-   
-   int labelCount = ArraySize(labels);
-   ArrayResize(gDebugLabels, labelCount * 2);
-   
-   for(int i = 0; i < labelCount; i++)
-   {
-      string labelName = "Label_" + IntegerToString(i);
-      CreateLabel(labelName, labels[i], InpXOffset, InpYOffset + (i * 25), InpLabelColor);
-      gDebugLabels[i*2] = labelName;
-      
-      string valueName = "Value_" + IntegerToString(i);
-      CreateLabel(valueName, "", InpXOffset + 150, InpYOffset + (i * 25), InpValueColor);
-      gDebugLabels[i*2 + 1] = valueName;
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Create font size controls                                        |
-//+------------------------------------------------------------------+
-void CreateFontSizeControls()
-{
-   ButtonCreate(0, "BtnIncrease", 0, InpXOffset, 5, 20, 20, "+", "Arial", 10);
-   ButtonCreate(0, "BtnDecrease", 0, InpXOffset + 25, 5, 20, 20, "-", "Arial", 10);
-   ButtonCreate(0, "FontSize", 0, InpXOffset + 50, 5, 60, 20, 
-               "Size: " + IntegerToString(gCurrentFontSize), "Arial", 8);
-}
-
-//+------------------------------------------------------------------+
-//| Update debug information                                         |
-//+------------------------------------------------------------------+
-void UpdateDebugInfo()
-{
-   datetime serverTime = TimeTradeServer();
-   MqlDateTime dt;
-   TimeToStruct(serverTime, dt);
-   string currentTime = StringFormat("%04d-%02d-%02d %02d:%02d:%02d", 
-                                   dt.year, dt.mon, dt.day, 
-                                   dt.hour, dt.min, dt.sec);
-   
-   long accountLogin = AccountInfoInteger(ACCOUNT_LOGIN);
-   string accountName = AccountInfoString(ACCOUNT_NAME);
-   double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-   
-   gStats.currentSpread = (double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
-   gStats.pingServer = (int)TerminalInfoInteger(TERMINAL_PING_LAST);
-   gStats.calculatedLot = CalculateLotSize();
-   gStats.riskAmount = accountBalance * InpRiskPercent / 100.0;
-   
-   UpdateLabel("Value_0", currentTime);
-   UpdateLabel("Value_1", IntegerToString(accountLogin));
-   UpdateLabel("Value_2", accountName);
-   UpdateLabel("Value_3", DoubleToString(accountBalance, 2));
-   UpdateLabel("Value_4", DoubleToString(accountEquity, 2));
-   UpdateLabel("Value_5", DoubleToString(InpRiskPercent, 2) + "%");
-   UpdateLabel("Value_6", DoubleToString(gStats.riskAmount, 2));
-   UpdateLabel("Value_7", DoubleToString(gStats.calculatedLot, 2));
-   UpdateLabel("Value_8", IntegerToString(gStats.currentSpread));
-   UpdateLabel("Value_9", IntegerToString(gStats.totalTrades));
-   UpdateLabel("Value_10", IntegerToString(gStats.pingServer) + " ms");
-   UpdateLabel("Value_11", DoubleToString(gStats.dailyProfit - gStats.dailyLoss, 2));
-}
-
-//+------------------------------------------------------------------+
-//| Calculate lot size                                               |
-//+------------------------------------------------------------------+
 double CalculateLotSize()
 {
-   if(!InpUseRiskPercent)
-      return InpFixedLotSize;
-      
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double riskAmount = balance * (InpRiskPercent / 100.0);
-double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-double pointValue = tickValue / tickSize;
-
-double lotSize = riskAmount / (InpStopLoss * pointValue);
-lotSize = NormalizeDouble(lotSize, 2);
-
-double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-
-lotSize = MathMin(maxLot, MathMax(minLot, lotSize));
-lotSize = NormalizeDouble(lotSize / lotStep, 0) * lotStep;
-   
-   // Round to the nearest lot step while maintaining precision
-   lotSize = NormalizeDouble(MathRound(lotSize / lotStep) * lotStep, 2);
-   
-   // Ensure lot size is within allowed range
-   lotSize = MathMin(maxLot, MathMax(minLot, lotSize));
-   
-   return lotSize;
+    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double risk = balance * RiskPercent / 100.0;
+    double tickRisk = StopLoss * tickValue + Commission;
+    double lotSize = NormalizeDouble(risk / tickRisk, 2);
+    
+    return MathMin(MathMax(lotSize, minLot), maxLot);
 }
 
-//+------------------------------------------------------------------+
-//| Create label                                                     |
-//+------------------------------------------------------------------+
-void CreateLabel(string name, string text, int x, int y, color clr)
+bool ClosePosition(const ulong ticket)
 {
-   ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
-   ObjectSetString(0, name, OBJPROP_TEXT, text);
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetString(0, name, OBJPROP_FONT, InpFontName);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, gCurrentFontSize);
-   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+    if(!PositionSelectByTicket(ticket)) return false;
+
+    ZeroMemory(request);
+    ZeroMemory(result);
+
+    request.action = TRADE_ACTION_DEAL;
+    request.position = ticket;
+    request.symbol = currentSymbol;
+    request.volume = PositionGetDouble(POSITION_VOLUME);
+    request.type = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? 
+                  ORDER_TYPE_SELL : ORDER_TYPE_BUY;
+    request.price = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ?
+                   SymbolInfoDouble(currentSymbol, SYMBOL_BID) :
+                   SymbolInfoDouble(currentSymbol, SYMBOL_ASK);
+    request.deviation = 5;
+
+    return OrderSend(request, result);
+}
+
+void CancelAllPending()
+{
+    for(int i = OrdersTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(OrderSelect(ticket) && OrderGetInteger(ORDER_MAGIC) == MagicNumber)
+        {
+            ZeroMemory(request);
+            ZeroMemory(result);
+            
+            request.action = TRADE_ACTION_REMOVE;
+            request.order = ticket;
+            
+            OrderSend(request, result);
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
-//| Create button                                                    |
+//| Expert Deinitialization Function                                  |
 //+------------------------------------------------------------------+
-bool ButtonCreate(const long chart_ID, const string name, const int sub_window,
-                 const int x, const int y, const int width, const int height,
-                 const string text, const string font="Arial", const int font_size=10)
+void OnDeinit(const int reason)
 {
-   if(!ObjectCreate(chart_ID, name, OBJ_BUTTON, sub_window, 0, 0))
-   {
-      Print("Failed to create button: ", name);
-      return false;
-   }
-   
-   ObjectSetInteger(chart_ID, name, OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(chart_ID, name, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(chart_ID, name, OBJPROP_XSIZE, width);
-   ObjectSetInteger(chart_ID, name, OBJPROP_YSIZE, height);
-   ObjectSetString(chart_ID, name, OBJPROP_TEXT, text);
-   ObjectSetString(chart_ID, name, OBJPROP_FONT, font);
-   ObjectSetInteger(chart_ID, name, OBJPROP_FONTSIZE, font_size);
-   ObjectSetInteger(chart_ID, name, OBJPROP_COLOR, clrBlack);
-   ObjectSetInteger(chart_ID, name, OBJPROP_BGCOLOR, clrWhite);
-   ObjectSetInteger(chart_ID, name, OBJPROP_BORDER_COLOR, clrBlack);
-   ObjectSetInteger(chart_ID, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   
-   return true;
-}
-//+------------------------------------------------------------------+
-//| Update label                                                     |
-//+------------------------------------------------------------------+
-void UpdateLabel(string name, string text)
-{
-   ObjectSetString(0, name, OBJPROP_TEXT, text);
+    ArrayFree(trailingStates);
 }
 
 //+------------------------------------------------------------------+
-//| Update font size                                                 |
+//| Order Management Functions                                        |
 //+------------------------------------------------------------------+
-void UpdateFontSize()
+bool PlacePendingOrder(const ENUM_ORDER_TYPE type, const double price)
 {
-   for(int i = 0; i < ArraySize(gDebugLabels); i++)
-   {
-      if(gDebugLabels[i] != "")
-      {
-         ObjectSetInteger(0, gDebugLabels[i], OBJPROP_FONTSIZE, gCurrentFontSize);
-      }
-   }
+    HiddenLevels levels = CalculateHiddenLevels(price, type);
+    
+    ZeroMemory(request);
+    ZeroMemory(result);
+
+    request.action = TRADE_ACTION_PENDING;
+    request.symbol = currentSymbol;
+    request.volume = CalculateLotSize();
+    request.type = type;
+    request.price = price;
+    request.sl = levels.fakeSL;
+    request.tp = levels.fakeTP;
+    request.deviation = 5;
+    request.magic = MagicNumber;
+    request.comment = OrderComment;
+
+    if(!OrderSend(request, result)) return false;
+    
+    trailingStates[result.order].levels = levels;
+    return true;
+}
+
+void ManagePendingOrders(const DonchianLevels &donchian)
+{
+    const double effectiveUpperBand = donchian.upperBand + commissionPerLot * pointValue;
+    const double effectiveLowerBand = donchian.lowerBand - commissionPerLot * pointValue;
+    const double bodyHigh = MathMax(iOpen(currentSymbol, Timeframe, 1), iClose(currentSymbol, Timeframe, 1));
+    const double bodyLow = MathMin(iOpen(currentSymbol, Timeframe, 1), iClose(currentSymbol, Timeframe, 1));
+
+    bool buyStopExists = false, sellStopExists = false;
+    ulong buyTicket = 0, sellTicket = 0;
+
+    for(int i = OrdersTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(OrderSelect(ticket) && OrderGetInteger(ORDER_MAGIC) == MagicNumber)
+        {
+            ENUM_ORDER_TYPE type = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+            if(type == ORDER_TYPE_BUY_STOP)
+            {
+                buyStopExists = true;
+                buyTicket = ticket;
+            }
+            else if(type == ORDER_TYPE_SELL_STOP)
+            {
+                sellStopExists = true;
+                sellTicket = ticket;
+            }
+        }
+    }
+
+    // Place or modify orders based on conditions
+    if(currentHigh > effectiveUpperBand)
+    {
+        if(!buyStopExists) PlacePendingOrder(ORDER_TYPE_BUY_STOP, bodyHigh);
+        if(!sellStopExists) PlacePendingOrder(ORDER_TYPE_SELL_STOP, bodyLow);
+    }
+    else if(currentLow < effectiveLowerBand)
+    {
+        if(!sellStopExists) PlacePendingOrder(ORDER_TYPE_SELL_STOP, bodyLow);
+        if(!buyStopExists) PlacePendingOrder(ORDER_TYPE_BUY_STOP, bodyHigh);
+    }
+    else
+    {
+        CancelAllPending();
+    }
 }
 
 //+------------------------------------------------------------------+
-//| Delete debug display                                             |
+//| Position Management Functions                                      |
 //+------------------------------------------------------------------+
-void DeleteDebugDisplay()
+void ManageOpenPositions()
 {
-   for(int i = 0; i < ArraySize(gDebugLabels); i++)
-   {
-      if(gDebugLabels[i] != "")
-         ObjectDelete(0, gDebugLabels[i]);
-   }
-   ArrayResize(gDebugLabels, 0);
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(PositionSelectByTicket(ticket) && 
+           PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        {
+            ManagePosition(ticket);
+        }
+    }
+}
+
+void ManagePosition(const ulong ticket)
+{
+    if(!PositionSelectByTicket(ticket)) return;
+
+    ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+    double currentPrice = (type == POSITION_TYPE_BUY) ? 
+                         SymbolInfoDouble(currentSymbol, SYMBOL_BID) :
+                         SymbolInfoDouble(currentSymbol, SYMBOL_ASK);
+    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+    double currentSl = PositionGetDouble(POSITION_SL);
+    
+    // Check Virtual SL/TP
+    if(UseVirtualSLTP)
+    {
+        HiddenLevels levels = trailingStates[ticket].levels;
+        if((type == POSITION_TYPE_BUY && currentPrice <= levels.realSL) ||
+           (type == POSITION_TYPE_SELL && currentPrice >= levels.realSL))
+        {
+            ClosePosition(ticket);
+            return;
+        }
+        
+        if((type == POSITION_TYPE_BUY && currentPrice >= levels.realTP) ||
+           (type == POSITION_TYPE_SELL && currentPrice <= levels.realTP))
+        {
+            ClosePosition(ticket);
+            return;
+        }
+    }
+
+    double pointsProfit = (MathAbs(currentPrice - openPrice) / pointValue) - commissionPerLot;
+    bool isAtBreakeven = (type == POSITION_TYPE_BUY && currentSl >= openPrice) ||
+                        (type == POSITION_TYPE_SELL && currentSl <= openPrice);
+
+    // Break Even Logic
+    if(!isAtBreakeven && pointsProfit >= BreakEven)
+    {
+        double newSl = openPrice + (type == POSITION_TYPE_BUY ?
+                      (1 + commissionPerLot) * pointValue :
+                      (-1 - commissionPerLot) * pointValue);
+                      
+        if(UseVirtualSLTP)
+        {
+            trailingStates[ticket].levels.realSL = newSl;
+            newSl = (type == POSITION_TYPE_BUY) ?
+                    newSl - VirtualDistance * pointValue :
+                    newSl + VirtualDistance * pointValue;
+        }
+        
+        if(ModifyPositionSl(ticket, newSl))
+        {
+            if(UseSmartTrailing)
+            {
+                trailingStates[ticket].isTrailingActive = false;
+                trailingStates[ticket].lastTrailingLevel = 0.0;
+            }
+            return;
+        }
+    }
+
+    // Trailing Logic
+    if(isAtBreakeven && pointsProfit >= TrailingStartPoints)
+    {
+        if(UseSmartTrailing)
+            HandleSmartTrailing(ticket, type, currentPrice, currentSl, pointsProfit);
+        else
+            HandleRegularTrailing(ticket, type, currentPrice, currentSl);
+    }
 }
 
 //+------------------------------------------------------------------+
-//| Delete font controls                                             |
+//| Trailing Functions                                                |
 //+------------------------------------------------------------------+
-void DeleteFontControls()
+double CalculateVolatility()
 {
-   ObjectDelete(0, "BtnIncrease");
-   ObjectDelete(0, "BtnDecrease");
-   ObjectDelete(0, "FontSize");
+    double atr[];
+    ArraySetAsSeries(atr, true);
+    
+    int atrHandle = iATR(currentSymbol, PERIOD_CURRENT, 14);
+    CopyBuffer(atrHandle, 0, 0, 1, atr);
+    
+    double currentATR = atr[0];
+    double averageATR = 0;
+    
+    CopyBuffer(atrHandle, 0, 0, 14, atr);
+    for(int i = 0; i < 14; i++)
+    {
+        averageATR += atr[i];
+    }
+    averageATR /= 14;
+    
+    IndicatorRelease(atrHandle);
+    
+    return currentATR / averageATR;
+}
+
+void HandleSmartTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
+                        const double currentPrice, const double currentSl,
+                        const double pointsProfit)
+{
+    TrailingState state = trailingStates[ticket];
+    
+    if(!state.isTrailingActive)
+    {
+        state.isTrailingActive = true;
+        state.lastTrailingLevel = currentSl;
+        state.highestProfit = pointsProfit;
+        state.lowestProfit = pointsProfit;
+        state.lastUpdate = TimeCurrent();
+        state.volatilityFactor = UseVolatilityTrailing ? CalculateVolatility() : 1.0;
+    }
+
+    state.highestProfit = MathMax(state.highestProfit, pointsProfit);
+    state.lowestProfit = MathMin(state.lowestProfit, pointsProfit);
+
+    double trailingStep = UseVolatilityTrailing ? 
+                         TrailingStop * state.volatilityFactor :
+                         TrailingStop;
+    
+    trailingStep = MathMax(trailingStep, MinimumTrailingStep);
+    double trailingDistance = trailingStep * TrailingRatio;
+
+    double realNewSL = currentPrice - (type == POSITION_TYPE_BUY ?
+                      (trailingDistance + commissionPerLot) * pointValue :
+                      -(trailingDistance + commissionPerLot) * pointValue);
+
+    double fakeNewSL = UseVirtualSLTP ? (type == POSITION_TYPE_BUY ?
+                      realNewSL - VirtualDistance * pointValue :
+                      realNewSL + VirtualDistance * pointValue) : realNewSL;
+
+    if((type == POSITION_TYPE_BUY && realNewSL > state.levels.realSL) ||
+       (type == POSITION_TYPE_SELL && realNewSL < state.levels.realSL))
+    {
+        if(ModifyPositionSl(ticket, fakeNewSL))
+        {
+            state.levels.realSL = realNewSL;
+            state.lastTrailingLevel = fakeNewSL;
+            trailingStates[ticket] = state;
+        }
+    }
+
+    if(UseVolatilityTrailing && TimeCurrent() - state.lastUpdate >= 300)
+    {
+        state.volatilityFactor = CalculateVolatility();
+        state.lastUpdate = TimeCurrent();
+        trailingStates[ticket] = state;
+    }
+}
+
+void HandleRegularTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
+                         const double currentPrice, const double currentSl)
+{
+    double newSl = currentPrice - (type == POSITION_TYPE_BUY ?
+                   (TrailingStop + commissionPerLot) * pointValue :
+                   -(TrailingStop + commissionPerLot) * pointValue);
+
+    if((type == POSITION_TYPE_BUY && newSl > currentSl) ||
+       (type == POSITION_TYPE_SELL && newSl < currentSl))
+    {
+        ModifyPositionSl(ticket, newSl);
+    }
 }
 
 //+------------------------------------------------------------------+
-//| Reset daily statistics                                           |
+//| Utility Functions                                                 |
 //+------------------------------------------------------------------+
-void ResetDailyStats()
+bool ModifyPositionSl(const ulong ticket, const double newSl)
 {
-   gStats.dailyProfit = 0;
-   gStats.dailyLoss = 0;
-   gStats.lastResetDay = TimeCurrent();
-   gStats.totalTrades = 0;
+    if(!PositionSelectByTicket(ticket)) return false;
+
+    ZeroMemory(request);
+    ZeroMemory(result);
+
+    request.action = TRADE_ACTION_SLTP;
+    request.position = ticket;
+    request.symbol = currentSymbol;
+    request.sl = newSl;
+    request.tp = PositionGetDouble(POSITION_TP);
+
+    return OrderSend(request, result);
+}
+
+double CalculateLotSize()
+{
+    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double risk = balance * RiskPercent / 100.0;
+    double tickRisk = StopLoss * tickValue + Commission;
+    double lotSize = NormalizeDouble(risk / tickRisk, 2);
+    
+    return MathMin(MathMax(lotSize, minLot), maxLot);
+}
+
+bool ClosePosition(const ulong ticket)
+{
+    if(!PositionSelectByTicket(ticket)) return false;
+
+    ZeroMemory(request);
+    ZeroMemory(result);
+
+    request.action = TRADE_ACTION_DEAL;
+    request.position = ticket;
+    request.symbol = currentSymbol;
+    request.volume = PositionGetDouble(POSITION_VOLUME);
+    request.type = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? 
+                  ORDER_TYPE_SELL : ORDER_TYPE_BUY;
+    request.price = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ?
+                   SymbolInfoDouble(currentSymbol, SYMBOL_BID) :
+                   SymbolInfoDouble(currentSymbol, SYMBOL_ASK);
+    request.deviation = 5;
+
+    return OrderSend(request, result);
+}
+
+void CancelAllPending()
+{
+    for(int i = OrdersTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(OrderSelect(ticket) && OrderGetInteger(ORDER_MAGIC) == MagicNumber)
+        {
+            ZeroMemory(request);
+            ZeroMemory(result);
+            
+            request.action = TRADE_ACTION_REMOVE;
+            request.order = ticket;
+            
+            OrderSend(request, result);
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
-//| Check daily reset                                                |
+//| Expert Deinitialization Function                                  |
 //+------------------------------------------------------------------+
-void CheckDailyReset()
+void OnDeinit(const int reason)
 {
-   MqlDateTime current, last;
-   TimeToStruct(TimeCurrent(), current);
-   TimeToStruct(gStats.lastResetDay, last);
-   
-   if(current.day != last.day)
-   {
-      ResetDailyStats();
-   }
+    ArrayFree(trailingStates);
 }
-
 //+------------------------------------------------------------------+
-//| Check if trading is allowed                                      |
-//+------------------------------------------------------------------+
-bool IsTradeAllowed()
-{
-   if(!gIsTradeAllowed) return false;
-   
-   if(gStats.currentSpread > InpMaxSpread)
-   {
-      Print("Trading halted: Spread too high (", gStats.currentSpread, ")");
-      return false;
-   }
-   
-   if(gStats.dailyLoss >= InpMaxDailyLoss)
-   {
-      Print("Trading halted: Daily loss limit reached");
-      return false;
-   }
-   
-   if(gStats.dailyProfit >= InpMaxDailyProfit)
-   {
-      Print("Trading halted: Daily profit target reached");
-      return false;
-   }
-   
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Check for new bar                                                |
-//+------------------------------------------------------------------+
-bool IsNewBar()
-{
-   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-   if(currentBarTime != gLastBarTime)
-   {
-      gLastBarTime = currentBarTime;
-      return true;
-   }
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Validate input parameters                                        |
-//+------------------------------------------------------------------+
-bool ValidateInputs()
-{
-   if(InpRiskPercent <= 0 || InpRiskPercent > 100)
-   {
-      Print("Error: Risk Percent must be between 0 and 100");
-      return false;
-   }
-   
-   if(InpStopLoss <= 0)
-   {
-      Print("Error: Stop Loss must be greater than 0");
-      return false;
-   }
-   
-   if(InpTakeProfit <= 0)
-   {
-      Print("Error: Take Profit must be greater than 0");
-      return false;
-   }
-   
-   if(InpMaxSpread <= 0)
-   {
-      Print("Error: Maximum Spread must be greater than 0");
-      return false;
-   }
-   
-   if(InpMaxOrders <= 0)
-   {
-      Print("Error: Maximum Orders must be greater than 0");
-      return false;
-   }
-   
-   if(InpFixedLotSize <= 0)
-   {
-      Print("Error: Fixed Lot Size must be greater than 0");
-      return false;
-   }
-   
-   return true;
-}
