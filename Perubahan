@@ -12,7 +12,6 @@
 //+------------------------------------------------------------------+
 //| Forward Declarations                                              |
 //+------------------------------------------------------------------+
-// Function declarations to avoid compile errors
 bool ModifyPositionSl(const ulong ticket, const double newSl);
 void HandleSmartTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
                         const double currentPrice, const double currentSl,
@@ -54,7 +53,6 @@ struct TrailingState
 //+------------------------------------------------------------------+
 //| Global Variables and Objects                                      |
 //+------------------------------------------------------------------+
-// Trading objects
 MqlTradeRequest   request;
 MqlTradeResult    result;
 static TrailingState trailingStates[];
@@ -118,6 +116,57 @@ input ENUM_TIMEFRAMES Timeframe = PERIOD_CURRENT;      // Trading Timeframe
 input ENUM_TIMEFRAMES DonchianTimeframe = PERIOD_W1;   // Donchian Timeframe
 input int             DonchianPeriod = 20;            // Donchian Period
 input bool           UseMultiTimeframe = false;       // Use Multi Timeframe Analysis
+
+//+------------------------------------------------------------------+
+//| Calculate Donchian Channels                                       |
+//+------------------------------------------------------------------+
+void CalculateDonchianChannels(const string symbol, const ENUM_TIMEFRAMES timeframe, 
+                             const int period, double &upperBand, double &lowerBand)
+{
+    double highArray[], lowArray[];
+    ArraySetAsSeries(highArray, true);
+    ArraySetAsSeries(lowArray, true);
+    
+    // Copy price data
+    CopyHigh(symbol, timeframe, 0, period, highArray);
+    CopyLow(symbol, timeframe, 0, period, lowArray);
+    
+    // Calculate highest high and lowest low
+    upperBand = highArray[ArrayMaximum(highArray, 0, period)];
+    lowerBand = lowArray[ArrayMinimum(lowArray, 0, period)];
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Hidden Levels Function                                   |
+//+------------------------------------------------------------------+
+HiddenLevels CalculateHiddenLevels(const double price, const ENUM_ORDER_TYPE type)
+{
+    HiddenLevels levels;
+    
+    double direction = (type == ORDER_TYPE_BUY_STOP || type == ORDER_TYPE_BUY_LIMIT) ? 1.0 : -1.0;
+    
+    // Calculate real SL/TP
+    levels.realSL = price - direction * StopLoss * pointValue;
+    levels.realTP = price + direction * TakeProfit * pointValue;
+    
+    // Calculate fake SL/TP with virtual distance
+    if(UseVirtualSLTP)
+    {
+        double randomOffset = UseRandomOffset ? 
+                            MathRand() % MaxRandomPoints * pointValue : 0;
+                            
+        levels.fakeSL = levels.realSL + (direction * VirtualDistance * pointValue) + randomOffset;
+        levels.fakeTP = levels.realTP - (direction * VirtualDistance * pointValue) + randomOffset;
+    }
+    else
+    {
+        levels.fakeSL = levels.realSL;
+        levels.fakeTP = levels.realTP;
+    }
+    
+    return levels;
+}
+
 //+------------------------------------------------------------------+
 //| Order Management Functions                                        |
 //+------------------------------------------------------------------+
@@ -139,14 +188,25 @@ bool PlacePendingOrder(const ENUM_ORDER_TYPE type, const double price)
     request.magic = MagicNumber;
     request.comment = OrderComment;
 
-    if(!OrderSend(request, result)) return false;
+    Print("Placing order: Type=", type, " Price=", price, " SL=", levels.fakeSL, " TP=", levels.fakeTP);
+
+    if(!OrderSend(request, result)) 
+    {
+        Print("OrderSend error: ", GetLastError());
+        return false;
+    }
     
     trailingStates[result.order].levels = levels;
     return true;
 }
 
+//+------------------------------------------------------------------+
+//| Pending Orders Management                                         |
+//+------------------------------------------------------------------+
 void ManagePendingOrders(const DonchianLevels &donchian)
 {
+    Print("Managing Pending Orders - Upper:", donchian.upperBand, " Lower:", donchian.lowerBand);
+    
     const double effectiveUpperBand = donchian.upperBand + commissionPerLot * pointValue;
     const double effectiveLowerBand = donchian.lowerBand - commissionPerLot * pointValue;
     const double bodyHigh = MathMax(iOpen(currentSymbol, Timeframe, 1), iClose(currentSymbol, Timeframe, 1));
@@ -177,11 +237,13 @@ void ManagePendingOrders(const DonchianLevels &donchian)
     // Place or modify orders based on conditions
     if(currentHigh > effectiveUpperBand)
     {
+        Print("Current High > Upper Band - Placing orders");
         if(!buyStopExists) PlacePendingOrder(ORDER_TYPE_BUY_STOP, bodyHigh);
         if(!sellStopExists) PlacePendingOrder(ORDER_TYPE_SELL_STOP, bodyLow);
     }
     else if(currentLow < effectiveLowerBand)
     {
+        Print("Current Low < Lower Band - Placing orders");
         if(!sellStopExists) PlacePendingOrder(ORDER_TYPE_SELL_STOP, bodyLow);
         if(!buyStopExists) PlacePendingOrder(ORDER_TYPE_BUY_STOP, bodyHigh);
     }
@@ -433,9 +495,32 @@ void CancelAllPending()
             request.action = TRADE_ACTION_REMOVE;
             request.order = ticket;
             
-            OrderSend(request, result);
+            if(!OrderSend(request, result))
+            {
+                Print("Error canceling order ", ticket, ": ", GetLastError());
+            }
         }
     }
+}
+
+//+------------------------------------------------------------------+
+//| Expert Initialization Function                                    |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    // Initialize symbol-specific values
+    currentSymbol = Symbol();
+    pointValue = SymbolInfoDouble(currentSymbol, SYMBOL_POINT);
+    tickValue = SymbolInfoDouble(currentSymbol, SYMBOL_TRADE_TICK_VALUE);
+    minLot = SymbolInfoDouble(currentSymbol, SYMBOL_VOLUME_MIN);
+    maxLot = SymbolInfoDouble(currentSymbol, SYMBOL_VOLUME_MAX);
+    commissionPerLot = Commission;
+    
+    Print("Expert initialized with Symbol:", currentSymbol);
+    Print("Point Value:", pointValue, " Tick Value:", tickValue);
+    Print("Min Lot:", minLot, " Max Lot:", maxLot);
+
+    return(INIT_SUCCEEDED);
 }
 
 //+------------------------------------------------------------------+
@@ -447,330 +532,29 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
-//| Order Management Functions                                        |
+//| Expert Tick Function                                             |
 //+------------------------------------------------------------------+
-bool PlacePendingOrder(const ENUM_ORDER_TYPE type, const double price)
+void OnTick()
 {
-    HiddenLevels levels = CalculateHiddenLevels(price, type);
-    
-    ZeroMemory(request);
-    ZeroMemory(result);
+    // Update current price data
+    currentHigh = iHigh(currentSymbol, Timeframe, 0);
+    currentLow = iLow(currentSymbol, Timeframe, 0);
 
-    request.action = TRADE_ACTION_PENDING;
-    request.symbol = currentSymbol;
-    request.volume = CalculateLotSize();
-    request.type = type;
-    request.price = price;
-    request.sl = levels.fakeSL;
-    request.tp = levels.fakeTP;
-    request.deviation = 5;
-    request.magic = MagicNumber;
-    request.comment = OrderComment;
+    // Check for new bar
+    datetime currentBarTime = iTime(currentSymbol, Timeframe, 0);
+    bool isNewBar = (currentBarTime != lastBarTime);
+    lastBarTime = currentBarTime;
 
-    if(!OrderSend(request, result)) return false;
-    
-    trailingStates[result.order].levels = levels;
-    return true;
-}
-
-void ManagePendingOrders(const DonchianLevels &donchian)
-{
-    const double effectiveUpperBand = donchian.upperBand + commissionPerLot * pointValue;
-    const double effectiveLowerBand = donchian.lowerBand - commissionPerLot * pointValue;
-    const double bodyHigh = MathMax(iOpen(currentSymbol, Timeframe, 1), iClose(currentSymbol, Timeframe, 1));
-    const double bodyLow = MathMin(iOpen(currentSymbol, Timeframe, 1), iClose(currentSymbol, Timeframe, 1));
-
-    bool buyStopExists = false, sellStopExists = false;
-    ulong buyTicket = 0, sellTicket = 0;
-
-    for(int i = OrdersTotal() - 1; i >= 0; i--)
+    if(isNewBar)
     {
-        ulong ticket = OrderGetTicket(i);
-        if(OrderSelect(ticket) && OrderGetInteger(ORDER_MAGIC) == MagicNumber)
-        {
-            ENUM_ORDER_TYPE type = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
-            if(type == ORDER_TYPE_BUY_STOP)
-            {
-                buyStopExists = true;
-                buyTicket = ticket;
-            }
-            else if(type == ORDER_TYPE_SELL_STOP)
-            {
-                sellStopExists = true;
-                sellTicket = ticket;
-            }
-        }
-    }
-
-    // Place or modify orders based on conditions
-    if(currentHigh > effectiveUpperBand)
-    {
-        if(!buyStopExists) PlacePendingOrder(ORDER_TYPE_BUY_STOP, bodyHigh);
-        if(!sellStopExists) PlacePendingOrder(ORDER_TYPE_SELL_STOP, bodyLow);
-    }
-    else if(currentLow < effectiveLowerBand)
-    {
-        if(!sellStopExists) PlacePendingOrder(ORDER_TYPE_SELL_STOP, bodyLow);
-        if(!buyStopExists) PlacePendingOrder(ORDER_TYPE_BUY_STOP, bodyHigh);
-    }
-    else
-    {
-        CancelAllPending();
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Position Management Functions                                      |
-//+------------------------------------------------------------------+
-void ManageOpenPositions()
-{
-    for(int i = PositionsTotal() - 1; i >= 0; i--)
-    {
-        ulong ticket = PositionGetTicket(i);
-        if(PositionSelectByTicket(ticket) && 
-           PositionGetInteger(POSITION_MAGIC) == MagicNumber)
-        {
-            ManagePosition(ticket);
-        }
-    }
-}
-
-void ManagePosition(const ulong ticket)
-{
-    if(!PositionSelectByTicket(ticket)) return;
-
-    ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-    double currentPrice = (type == POSITION_TYPE_BUY) ? 
-                         SymbolInfoDouble(currentSymbol, SYMBOL_BID) :
-                         SymbolInfoDouble(currentSymbol, SYMBOL_ASK);
-    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-    double currentSl = PositionGetDouble(POSITION_SL);
-    
-    // Check Virtual SL/TP
-    if(UseVirtualSLTP)
-    {
-        HiddenLevels levels = trailingStates[ticket].levels;
-        if((type == POSITION_TYPE_BUY && currentPrice <= levels.realSL) ||
-           (type == POSITION_TYPE_SELL && currentPrice >= levels.realSL))
-        {
-            ClosePosition(ticket);
-            return;
-        }
+        // Calculate Donchian Channels
+        CalculateDonchianChannels(currentSymbol, DonchianTimeframe, 
+                                DonchianPeriod, g_donchian.upperBand, g_donchian.lowerBand);
         
-        if((type == POSITION_TYPE_BUY && currentPrice >= levels.realTP) ||
-           (type == POSITION_TYPE_SELL && currentPrice <= levels.realTP))
-        {
-            ClosePosition(ticket);
-            return;
-        }
+        Print("New Bar - Donchian Bands Updated - Upper:", g_donchian.upperBand, " Lower:", g_donchian.lowerBand);
     }
 
-    double pointsProfit = (MathAbs(currentPrice - openPrice) / pointValue) - commissionPerLot;
-    bool isAtBreakeven = (type == POSITION_TYPE_BUY && currentSl >= openPrice) ||
-                        (type == POSITION_TYPE_SELL && currentSl <= openPrice);
-
-    // Break Even Logic
-    if(!isAtBreakeven && pointsProfit >= BreakEven)
-    {
-        double newSl = openPrice + (type == POSITION_TYPE_BUY ?
-                      (1 + commissionPerLot) * pointValue :
-                      (-1 - commissionPerLot) * pointValue);
-                      
-        if(UseVirtualSLTP)
-        {
-            trailingStates[ticket].levels.realSL = newSl;
-            newSl = (type == POSITION_TYPE_BUY) ?
-                    newSl - VirtualDistance * pointValue :
-                    newSl + VirtualDistance * pointValue;
-        }
-        
-        if(ModifyPositionSl(ticket, newSl))
-        {
-            if(UseSmartTrailing)
-            {
-                trailingStates[ticket].isTrailingActive = false;
-                trailingStates[ticket].lastTrailingLevel = 0.0;
-            }
-            return;
-        }
-    }
-
-    // Trailing Logic
-    if(isAtBreakeven && pointsProfit >= TrailingStartPoints)
-    {
-        if(UseSmartTrailing)
-            HandleSmartTrailing(ticket, type, currentPrice, currentSl, pointsProfit);
-        else
-            HandleRegularTrailing(ticket, type, currentPrice, currentSl);
-    }
+    // Manage positions and orders
+    ManageOpenPositions();
+    ManagePendingOrders(g_donchian);
 }
-
-//+------------------------------------------------------------------+
-//| Trailing Functions                                                |
-//+------------------------------------------------------------------+
-double CalculateVolatility()
-{
-    double atr[];
-    ArraySetAsSeries(atr, true);
-    
-    int atrHandle = iATR(currentSymbol, PERIOD_CURRENT, 14);
-    CopyBuffer(atrHandle, 0, 0, 1, atr);
-    
-    double currentATR = atr[0];
-    double averageATR = 0;
-    
-    CopyBuffer(atrHandle, 0, 0, 14, atr);
-    for(int i = 0; i < 14; i++)
-    {
-        averageATR += atr[i];
-    }
-    averageATR /= 14;
-    
-    IndicatorRelease(atrHandle);
-    
-    return currentATR / averageATR;
-}
-
-void HandleSmartTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
-                        const double currentPrice, const double currentSl,
-                        const double pointsProfit)
-{
-    TrailingState state = trailingStates[ticket];
-    
-    if(!state.isTrailingActive)
-    {
-        state.isTrailingActive = true;
-        state.lastTrailingLevel = currentSl;
-        state.highestProfit = pointsProfit;
-        state.lowestProfit = pointsProfit;
-        state.lastUpdate = TimeCurrent();
-        state.volatilityFactor = UseVolatilityTrailing ? CalculateVolatility() : 1.0;
-    }
-
-    state.highestProfit = MathMax(state.highestProfit, pointsProfit);
-    state.lowestProfit = MathMin(state.lowestProfit, pointsProfit);
-
-    double trailingStep = UseVolatilityTrailing ? 
-                         TrailingStop * state.volatilityFactor :
-                         TrailingStop;
-    
-    trailingStep = MathMax(trailingStep, MinimumTrailingStep);
-    double trailingDistance = trailingStep * TrailingRatio;
-
-    double realNewSL = currentPrice - (type == POSITION_TYPE_BUY ?
-                      (trailingDistance + commissionPerLot) * pointValue :
-                      -(trailingDistance + commissionPerLot) * pointValue);
-
-    double fakeNewSL = UseVirtualSLTP ? (type == POSITION_TYPE_BUY ?
-                      realNewSL - VirtualDistance * pointValue :
-                      realNewSL + VirtualDistance * pointValue) : realNewSL;
-
-    if((type == POSITION_TYPE_BUY && realNewSL > state.levels.realSL) ||
-       (type == POSITION_TYPE_SELL && realNewSL < state.levels.realSL))
-    {
-        if(ModifyPositionSl(ticket, fakeNewSL))
-        {
-            state.levels.realSL = realNewSL;
-            state.lastTrailingLevel = fakeNewSL;
-            trailingStates[ticket] = state;
-        }
-    }
-
-    if(UseVolatilityTrailing && TimeCurrent() - state.lastUpdate >= 300)
-    {
-        state.volatilityFactor = CalculateVolatility();
-        state.lastUpdate = TimeCurrent();
-        trailingStates[ticket] = state;
-    }
-}
-
-void HandleRegularTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
-                         const double currentPrice, const double currentSl)
-{
-    double newSl = currentPrice - (type == POSITION_TYPE_BUY ?
-                   (TrailingStop + commissionPerLot) * pointValue :
-                   -(TrailingStop + commissionPerLot) * pointValue);
-
-    if((type == POSITION_TYPE_BUY && newSl > currentSl) ||
-       (type == POSITION_TYPE_SELL && newSl < currentSl))
-    {
-        ModifyPositionSl(ticket, newSl);
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Utility Functions                                                 |
-//+------------------------------------------------------------------+
-bool ModifyPositionSl(const ulong ticket, const double newSl)
-{
-    if(!PositionSelectByTicket(ticket)) return false;
-
-    ZeroMemory(request);
-    ZeroMemory(result);
-
-    request.action = TRADE_ACTION_SLTP;
-    request.position = ticket;
-    request.symbol = currentSymbol;
-    request.sl = newSl;
-    request.tp = PositionGetDouble(POSITION_TP);
-
-    return OrderSend(request, result);
-}
-
-double CalculateLotSize()
-{
-    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double risk = balance * RiskPercent / 100.0;
-    double tickRisk = StopLoss * tickValue + Commission;
-    double lotSize = NormalizeDouble(risk / tickRisk, 2);
-    
-    return MathMin(MathMax(lotSize, minLot), maxLot);
-}
-
-bool ClosePosition(const ulong ticket)
-{
-    if(!PositionSelectByTicket(ticket)) return false;
-
-    ZeroMemory(request);
-    ZeroMemory(result);
-
-    request.action = TRADE_ACTION_DEAL;
-    request.position = ticket;
-    request.symbol = currentSymbol;
-    request.volume = PositionGetDouble(POSITION_VOLUME);
-    request.type = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? 
-                  ORDER_TYPE_SELL : ORDER_TYPE_BUY;
-    request.price = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ?
-                   SymbolInfoDouble(currentSymbol, SYMBOL_BID) :
-                   SymbolInfoDouble(currentSymbol, SYMBOL_ASK);
-    request.deviation = 5;
-
-    return OrderSend(request, result);
-}
-
-void CancelAllPending()
-{
-    for(int i = OrdersTotal() - 1; i >= 0; i--)
-    {
-        ulong ticket = OrderGetTicket(i);
-        if(OrderSelect(ticket) && OrderGetInteger(ORDER_MAGIC) == MagicNumber)
-        {
-            ZeroMemory(request);
-            ZeroMemory(result);
-            
-            request.action = TRADE_ACTION_REMOVE;
-            request.order = ticket;
-            
-            OrderSend(request, result);
-        }
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Expert Deinitialization Function                                  |
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-    ArrayFree(trailingStates);
-}
-//+------------------------------------------------------------------+
