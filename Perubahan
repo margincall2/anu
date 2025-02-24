@@ -5,6 +5,7 @@
 #property link      "https://shopee.co.id/algotrade"
 #property version   "3.00"
 #property strict
+#property description "SakhaBreak V3 - Advanced Trading System"
 
 // Cache frequently used string constant
 #define ORDER_COMMENT_CONST "SakhaBreak_DC"
@@ -21,6 +22,8 @@ void HandleRegularTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
 void CancelAllPending();
 bool ClosePosition(const ulong ticket);
 double CalculateVolatility();
+bool CalculateDonchianChannels(const string symbol, const ENUM_TIMEFRAMES timeframe, 
+                             const int period, double &upperBand, double &lowerBand);
 
 //+------------------------------------------------------------------+
 //| Structures Definition                                             |
@@ -113,27 +116,46 @@ input double  VolatilityMultiplier = 1.0;    // Volatility Multiplier
 // Timeframe Settings
 input group "Timeframe Settings"
 input ENUM_TIMEFRAMES Timeframe = PERIOD_CURRENT;      // Trading Timeframe
-input ENUM_TIMEFRAMES DonchianTimeframe = PERIOD_W1;   // Donchian Timeframe
+input ENUM_TIMEFRAMES DonchianTimeframe = PERIOD_H1;   // Donchian Timeframe
 input int             DonchianPeriod = 20;            // Donchian Period
 input bool           UseMultiTimeframe = false;       // Use Multi Timeframe Analysis
-
 //+------------------------------------------------------------------+
-//| Calculate Donchian Channels                                       |
+//| Helper Functions                                                  |
 //+------------------------------------------------------------------+
-void CalculateDonchianChannels(const string symbol, const ENUM_TIMEFRAMES timeframe, 
+bool CalculateDonchianChannels(const string symbol, const ENUM_TIMEFRAMES timeframe, 
                              const int period, double &upperBand, double &lowerBand)
 {
     double highArray[], lowArray[];
     ArraySetAsSeries(highArray, true);
     ArraySetAsSeries(lowArray, true);
     
+    // Allocate arrays with proper size
+    if(ArrayResize(highArray, period) != period || ArrayResize(lowArray, period) != period)
+    {
+        Print("Failed to allocate arrays for Donchian calculation");
+        return false;
+    }
+    
     // Copy price data
-    CopyHigh(symbol, timeframe, 0, period, highArray);
-    CopyLow(symbol, timeframe, 0, period, lowArray);
+    int copied = CopyHigh(symbol, timeframe, 0, period, highArray);
+    if(copied != period)
+    {
+        Print("Error copying high prices, copied=", copied, " error=", GetLastError());
+        return false;
+    }
+    
+    copied = CopyLow(symbol, timeframe, 0, period, lowArray);
+    if(copied != period)
+    {
+        Print("Error copying low prices, copied=", copied, " error=", GetLastError());
+        return false;
+    }
     
     // Calculate highest high and lowest low
     upperBand = highArray[ArrayMaximum(highArray, 0, period)];
     lowerBand = lowArray[ArrayMinimum(lowArray, 0, period)];
+    
+    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -172,6 +194,19 @@ HiddenLevels CalculateHiddenLevels(const double price, const ENUM_ORDER_TYPE typ
 //+------------------------------------------------------------------+
 bool PlacePendingOrder(const ENUM_ORDER_TYPE type, const double price)
 {
+    if(price <= 0)
+    {
+        Print("Invalid price for pending order");
+        return false;
+    }
+
+    double spread = SymbolInfoDouble(currentSymbol, SYMBOL_ASK) - SymbolInfoDouble(currentSymbol, SYMBOL_BID);
+    if(spread > MaxSpread * pointValue)
+    {
+        Print("Spread too high: ", spread, " > ", MaxSpread * pointValue);
+        return false;
+    }
+
     HiddenLevels levels = CalculateHiddenLevels(price, type);
     
     ZeroMemory(request);
@@ -196,25 +231,55 @@ bool PlacePendingOrder(const ENUM_ORDER_TYPE type, const double price)
         return false;
     }
     
+    if(result.retcode != TRADE_RETCODE_DONE)
+    {
+        Print("Order placement failed with retcode: ", result.retcode);
+        return false;
+    }
+    
     trailingStates[result.order].levels = levels;
     return true;
 }
 
 //+------------------------------------------------------------------+
-//| Pending Orders Management                                         |
+//| Manage Pending Orders                                             |
 //+------------------------------------------------------------------+
 void ManagePendingOrders(const DonchianLevels &donchian)
 {
+    if(donchian.upperBand <= 0 || donchian.lowerBand <= 0)
+    {
+        Print("Invalid Donchian values");
+        return;
+    }
+
     Print("Managing Pending Orders - Upper:", donchian.upperBand, " Lower:", donchian.lowerBand);
     
     const double effectiveUpperBand = donchian.upperBand + commissionPerLot * pointValue;
     const double effectiveLowerBand = donchian.lowerBand - commissionPerLot * pointValue;
-    const double bodyHigh = MathMax(iOpen(currentSymbol, Timeframe, 1), iClose(currentSymbol, Timeframe, 1));
-    const double bodyLow = MathMin(iOpen(currentSymbol, Timeframe, 1), iClose(currentSymbol, Timeframe, 1));
+    
+    // Get current candle values
+    const double bodyHigh = MathMax(iOpen(currentSymbol, Timeframe, 0), iClose(currentSymbol, Timeframe, 0));
+    const double bodyLow = MathMin(iOpen(currentSymbol, Timeframe, 0), iClose(currentSymbol, Timeframe, 0));
+    const double currentPrice = SymbolInfoDouble(currentSymbol, SYMBOL_ASK);
+
+    if(bodyHigh <= 0 || bodyLow <= 0)
+    {
+        Print("Invalid price levels for pending orders");
+        return;
+    }
+
+    // Check spread
+    double spread = SymbolInfoDouble(currentSymbol, SYMBOL_ASK) - SymbolInfoDouble(currentSymbol, SYMBOL_BID);
+    if(spread > MaxSpread * pointValue)
+    {
+        Print("Spread too high: ", spread, " > ", MaxSpread * pointValue);
+        return;
+    }
 
     bool buyStopExists = false, sellStopExists = false;
     ulong buyTicket = 0, sellTicket = 0;
 
+    // Check existing orders
     for(int i = OrdersTotal() - 1; i >= 0; i--)
     {
         ulong ticket = OrderGetTicket(i);
@@ -234,30 +299,47 @@ void ManagePendingOrders(const DonchianLevels &donchian)
         }
     }
 
-    // Place or modify orders based on conditions
-    if(currentHigh > effectiveUpperBand)
+    // Add more detailed logging
+    Print("Price analysis - Current:", currentPrice, 
+          " UpperBand:", effectiveUpperBand,
+          " LowerBand:", effectiveLowerBand,
+          " BodyHigh:", bodyHigh,
+          " BodyLow:", bodyLow);
+
+    // Modified order placement logic
+    if(currentPrice > effectiveUpperBand)
     {
-        Print("Current High > Upper Band - Placing orders");
-        if(!buyStopExists) PlacePendingOrder(ORDER_TYPE_BUY_STOP, bodyHigh);
-        if(!sellStopExists) PlacePendingOrder(ORDER_TYPE_SELL_STOP, bodyLow);
+        Print("Price above Upper Band - Placing orders");
+        if(!buyStopExists && PositionsTotal() < MaxPositions) 
+        {
+            double entryPrice = bodyHigh + (5 * pointValue); // Add small buffer
+            Print("Placing Buy Stop at:", entryPrice);
+            PlacePendingOrder(ORDER_TYPE_BUY_STOP, entryPrice);
+        }
     }
-    else if(currentLow < effectiveLowerBand)
+    else if(currentPrice < effectiveLowerBand)
     {
-        Print("Current Low < Lower Band - Placing orders");
-        if(!sellStopExists) PlacePendingOrder(ORDER_TYPE_SELL_STOP, bodyLow);
-        if(!buyStopExists) PlacePendingOrder(ORDER_TYPE_BUY_STOP, bodyHigh);
+        Print("Price below Lower Band - Placing orders");
+        if(!sellStopExists && PositionsTotal() < MaxPositions) 
+        {
+            double entryPrice = bodyLow - (5 * pointValue); // Add small buffer
+            Print("Placing Sell Stop at:", entryPrice);
+            PlacePendingOrder(ORDER_TYPE_SELL_STOP, entryPrice);
+        }
     }
     else
     {
+        // Only cancel orders if price is back inside the bands
         CancelAllPending();
     }
 }
-
 //+------------------------------------------------------------------+
 //| Position Management Functions                                      |
 //+------------------------------------------------------------------+
 void ManageOpenPositions()
 {
+    if(PositionsTotal() <= 0) return;
+
     for(int i = PositionsTotal() - 1; i >= 0; i--)
     {
         ulong ticket = PositionGetTicket(i);
@@ -287,6 +369,7 @@ void ManagePosition(const ulong ticket)
         if((type == POSITION_TYPE_BUY && currentPrice <= levels.realSL) ||
            (type == POSITION_TYPE_SELL && currentPrice >= levels.realSL))
         {
+            Print("Virtual SL hit - Closing position");
             ClosePosition(ticket);
             return;
         }
@@ -294,6 +377,7 @@ void ManagePosition(const ulong ticket)
         if((type == POSITION_TYPE_BUY && currentPrice >= levels.realTP) ||
            (type == POSITION_TYPE_SELL && currentPrice <= levels.realTP))
         {
+            Print("Virtual TP hit - Closing position");
             ClosePosition(ticket);
             return;
         }
@@ -317,6 +401,8 @@ void ManagePosition(const ulong ticket)
                     newSl - VirtualDistance * pointValue :
                     newSl + VirtualDistance * pointValue;
         }
+        
+        Print("Moving to breakeven - New SL:", newSl);
         
         if(ModifyPositionSl(ticket, newSl))
         {
@@ -347,21 +433,32 @@ double CalculateVolatility()
     double atr[];
     ArraySetAsSeries(atr, true);
     
-    int atrHandle = iATR(currentSymbol, PERIOD_CURRENT, 14);
-    CopyBuffer(atrHandle, 0, 0, 1, atr);
+    int atrHandle = iATR(currentSymbol, PERIOD_CURRENT, ATRPeriod);
+    if(atrHandle == INVALID_HANDLE)
+    {
+        Print("Failed to create ATR indicator handle");
+        return 1.0;
+    }
+    
+    if(CopyBuffer(atrHandle, 0, 0, ATRPeriod, atr) != ATRPeriod)
+    {
+        Print("Failed to copy ATR data");
+        IndicatorRelease(atrHandle);
+        return 1.0;
+    }
     
     double currentATR = atr[0];
     double averageATR = 0;
     
-    CopyBuffer(atrHandle, 0, 0, 14, atr);
-    for(int i = 0; i < 14; i++)
+    for(int i = 0; i < ATRPeriod; i++)
     {
         averageATR += atr[i];
     }
-    averageATR /= 14;
+    averageATR /= ATRPeriod;
     
     IndicatorRelease(atrHandle);
     
+    if(averageATR == 0) return 1.0;
     return currentATR / averageATR;
 }
 
@@ -402,6 +499,8 @@ void HandleSmartTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
     if((type == POSITION_TYPE_BUY && realNewSL > state.levels.realSL) ||
        (type == POSITION_TYPE_SELL && realNewSL < state.levels.realSL))
     {
+        Print("Smart Trailing - Updating SL to:", fakeNewSL);
+        
         if(ModifyPositionSl(ticket, fakeNewSL))
         {
             state.levels.realSL = realNewSL;
@@ -417,7 +516,6 @@ void HandleSmartTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
         trailingStates[ticket] = state;
     }
 }
-
 void HandleRegularTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
                          const double currentPrice, const double currentSl)
 {
@@ -428,6 +526,7 @@ void HandleRegularTrailing(const ulong ticket, const ENUM_POSITION_TYPE type,
     if((type == POSITION_TYPE_BUY && newSl > currentSl) ||
        (type == POSITION_TYPE_SELL && newSl < currentSl))
     {
+        Print("Regular Trailing - Updating SL to:", newSl);
         ModifyPositionSl(ticket, newSl);
     }
 }
@@ -508,6 +607,24 @@ void CancelAllPending()
 //+------------------------------------------------------------------+
 int OnInit()
 {
+    // Initialize arrays first
+    ArrayResize(trailingStates, 1000); // Pre-allocate space for trailing states
+    
+    // Initialize each element manually instead of using ArrayInitialize
+    for(int i = 0; i < ArraySize(trailingStates); i++)
+    {
+        trailingStates[i].isTrailingActive = false;
+        trailingStates[i].lastTrailingLevel = 0.0;
+        trailingStates[i].highestProfit = 0.0;
+        trailingStates[i].lowestProfit = 0.0;
+        trailingStates[i].lastUpdate = 0;
+        trailingStates[i].volatilityFactor = 1.0;
+        trailingStates[i].levels.realSL = 0.0;
+        trailingStates[i].levels.realTP = 0.0;
+        trailingStates[i].levels.fakeSL = 0.0;
+        trailingStates[i].levels.fakeTP = 0.0;
+    }
+    
     // Initialize symbol-specific values
     currentSymbol = Symbol();
     pointValue = SymbolInfoDouble(currentSymbol, SYMBOL_POINT);
@@ -516,9 +633,22 @@ int OnInit()
     maxLot = SymbolInfoDouble(currentSymbol, SYMBOL_VOLUME_MAX);
     commissionPerLot = Commission;
     
+    // Validate timeframe inputs using local variable
+    ENUM_TIMEFRAMES useTimeframe = DonchianTimeframe;
+    if(useTimeframe == PERIOD_CURRENT)
+        useTimeframe = Period();
+        
+    // Add validation
+    if(DonchianPeriod <= 0)
+    {
+        Print("Invalid DonchianPeriod value");
+        return INIT_PARAMETERS_INCORRECT;
+    }
+    
     Print("Expert initialized with Symbol:", currentSymbol);
     Print("Point Value:", pointValue, " Tick Value:", tickValue);
     Print("Min Lot:", minLot, " Max Lot:", maxLot);
+    Print("Donchian Settings - Timeframe:", EnumToString(useTimeframe), " Period:", DonchianPeriod);
 
     return(INIT_SUCCEEDED);
 }
@@ -547,14 +677,29 @@ void OnTick()
 
     if(isNewBar)
     {
-        // Calculate Donchian Channels
-        CalculateDonchianChannels(currentSymbol, DonchianTimeframe, 
-                                DonchianPeriod, g_donchian.upperBand, g_donchian.lowerBand);
+        // Calculate Donchian Channels with error checking
+        if(!CalculateDonchianChannels(currentSymbol, DonchianTimeframe, 
+                                    DonchianPeriod, g_donchian.upperBand, g_donchian.lowerBand))
+        {
+            Print("Failed to calculate Donchian Channels, skipping this tick");
+            return;
+        }
         
-        Print("New Bar - Donchian Bands Updated - Upper:", g_donchian.upperBand, " Lower:", g_donchian.lowerBand);
+        Print("New Bar - Donchian Bands Updated - Upper:", g_donchian.upperBand, 
+              " Lower:", g_donchian.lowerBand,
+              " Current High:", currentHigh,
+              " Current Low:", currentLow);
     }
 
     // Manage positions and orders
     ManageOpenPositions();
     ManagePendingOrders(g_donchian);
+}
+
+//+------------------------------------------------------------------+
+//| Expert Tester Function                                           |
+//+------------------------------------------------------------------+
+double OnTester()
+{
+    return 0.0;
 }
